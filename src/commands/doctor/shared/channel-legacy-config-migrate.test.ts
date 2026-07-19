@@ -128,6 +128,7 @@ describe("bundled channel legacy config migrations", () => {
                 },
               },
               changes: ["Normalized channels.slack via bundled doctor contract."],
+              warnings: ["Slack compatibility warning."],
             }),
           }
         : undefined,
@@ -150,6 +151,25 @@ describe("bundled channel legacy config migrations", () => {
     expect(nextChannels.slack?.streaming).toBe(true);
     expect(nextChannels.slack?.normalizedByBundledContract).toBe(true);
     expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
+    expect(result.warnings).toEqual(["Slack compatibility warning."]);
+  });
+
+  it("preserves warning-only bundled channel results without applying their config", () => {
+    collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
+    loadBundledChannelDoctorContractApi.mockReturnValueOnce({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: Record<string, unknown> }) => ({
+        config: { ...cfg, warningOnlyMutation: true },
+        changes: [],
+        warnings: ["Replace the unresolved channel identity manually."],
+      }),
+    });
+
+    const config = { channels: { whatsapp: { allowFrom: ["123@lid"] } } };
+    const result = applyChannelDoctorCompatibilityMigrations(config);
+
+    expect(result.next).toBe(config);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual(["Replace the unresolved channel identity manually."]);
   });
 
   it("normalizes legacy private-network aliases exposed through bundled contract surfaces", () => {
@@ -177,6 +197,7 @@ describe("bundled channel legacy config migrations", () => {
         "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
         "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
       ],
+      warnings: ["Mattermost compatibility warning."],
     });
 
     const result = applyChannelDoctorCompatibilityMigrations({
@@ -229,6 +250,7 @@ describe("bundled channel legacy config migrations", () => {
       "Moved channels.mattermost.allowPrivateNetwork → channels.mattermost.network.dangerouslyAllowPrivateNetwork (true).",
       "Moved channels.mattermost.accounts.work.allowPrivateNetwork → channels.mattermost.accounts.work.network.dangerouslyAllowPrivateNetwork (false).",
     ]);
+    expect(result.warnings).toEqual(["Mattermost compatibility warning."]);
   });
 
   it("applies plugin doctor normalizers for configured non-channel plugin entries", () => {
@@ -247,6 +269,7 @@ describe("bundled channel legacy config migrations", () => {
         },
       },
       changes: ["Configured plugins.entries.lossless-claw.llm.allowedModels."],
+      warnings: ["Review the remaining lossless-claw model entries."],
     });
 
     const config = {
@@ -270,5 +293,6 @@ describe("bundled channel legacy config migrations", () => {
       pluginIds: ["lossless-claw"],
     });
     expect(result.changes).toEqual(["Configured plugins.entries.lossless-claw.llm.allowedModels."]);
+    expect(result.warnings).toEqual(["Review the remaining lossless-claw model entries."]);
   });
 });
