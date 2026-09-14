@@ -16,19 +16,27 @@ import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.chat.PendingAttachment
 import ai.openclaw.app.ui.design.ClawDesignTheme
+import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.provider.Settings
+import android.view.WindowManager
+import android.view.inspector.WindowInspector
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -43,10 +51,17 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import androidx.window.layout.WindowInfoTracker
+import androidx.window.layout.WindowInfoTrackerDecorator
+import androidx.window.layout.WindowLayoutInfo
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
 import okhttp3.mockwebserver.MockResponse
@@ -101,6 +116,7 @@ class SidebarGatewayPickerTest {
   }
 
   @After
+  @SuppressLint("RestrictedApi")
   fun tearDown() {
     composeRule.runOnIdle { mounted.value = false }
     store.clear()
@@ -109,6 +125,7 @@ class SidebarGatewayPickerTest {
     servers.forEach { it.shutdown() }
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, animatorScale)
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
+    WindowInfoTracker.reset()
   }
 
   @Test
@@ -308,6 +325,94 @@ class SidebarGatewayPickerTest {
     }
   }
 
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun phoneLightLargeTextKeepsLongNamesAndManagementReachable() {
+    assertLongNameProfile(dark = false, fontScale = 1.5f, showComposer = false, name = "phone-light-large")
+  }
+
+  @Test
+  fun tabletDarkLargeTextKeepsLongNamesAndManagementReachable() {
+    assertLongNameProfile(dark = true, fontScale = 2f, showComposer = true, name = "tablet-dark-large")
+  }
+
+  @Test
+  @SuppressLint("RestrictedApi")
+  fun actualGatewayPickerStaysOnItsSideOfASeparatingFold() {
+    val hinge = Rect(480, 0, 500, 800)
+    WindowInfoTracker.overrideDecorator(
+      object : WindowInfoTrackerDecorator {
+        override fun decorate(tracker: WindowInfoTracker): WindowInfoTracker =
+          object : WindowInfoTracker by tracker {
+            override fun windowLayoutInfo(activity: Activity) =
+              flow {
+                emit(WindowLayoutInfo(listOf(testFold(hinge))))
+                awaitCancellation()
+              }
+          }
+      },
+    )
+    val alpha = savedGateway("Local QA Alpha")
+    val beta = savedGateway("Local QA Beta")
+    focus(alpha)
+    showSidebarAndComposer()
+    openPicker()
+    composeRule.runOnIdle {
+      val popup =
+        WindowInspector.getGlobalWindowViews().single {
+          it.isAttachedToWindow && (it.layoutParams as? WindowManager.LayoutParams)?.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL
+        }
+      val location = IntArray(2).also(popup::getLocationOnScreen)
+      assertTrue("The native popup must not cross the hinge", location[0] + popup.width <= hinge.left)
+    }
+    capture("folded-picker", popup = true)
+    gatewayItem(beta).performClick()
+    awaitFocus(beta)
+    composeRule.onNodeWithText("Message OpenClaw").assertIsEnabled()
+  }
+
+  @Test
+  fun remountRetiresThePickerWithoutDroppingOwnerBoundDrafts() {
+    val alpha = savedGateway("Local QA Alpha")
+    savedGateway("Local QA Beta")
+    focus(alpha)
+    showSidebarAndComposer()
+    composeRule.onNode(hasSetTextAction()).performTextReplacement("Retained after remount")
+    openPicker()
+    composeRule.runOnIdle { mounted.value = false }
+    composeRule.waitForIdle()
+    composeRule.runOnIdle { mounted.value = true }
+    composeRule.waitForIdle()
+    composeRule.onAllNodes(isPopup()).assertCountEquals(0)
+    composeRule.onNodeWithText("Retained after remount").assertIsEnabled()
+    openPicker()
+    gatewayItem(alpha).assertIsSelected()
+  }
+
+  private fun assertLongNameProfile(
+    dark: Boolean,
+    fontScale: Float,
+    showComposer: Boolean,
+    name: String,
+  ) {
+    val alpha = savedGateway("Local research and engineering gateway with a deliberately long descriptive name Alpha")
+    val beta = savedGateway("Local documentation and release verification gateway with a long descriptive name Beta")
+    focus(alpha)
+    showSidebarAndComposer(dark = dark, fontScale = fontScale, showComposer = showComposer)
+    capture("$name-footer")
+    openPicker()
+    gatewayItem(alpha).assertIsSelected()
+    gatewayItem(beta).performScrollTo().assertIsDisplayed()
+    composeRule.onNodeWithText("Manage Gateways").performScrollTo().assertIsDisplayed()
+    capture("$name-menu", popup = true)
+    gatewayItem(beta).performScrollTo().performClick()
+    awaitFocus(beta)
+    openPicker()
+    gatewayItem(beta).assertIsSelected()
+    composeRule.onNodeWithText("Manage Gateways").performScrollTo().performClick()
+    composeRule.runOnIdle { assertEquals(SettingsRoute.Gateway, model.requestedSettingsRoute.value) }
+  }
+
   private fun savedGateway(name: String): GatewayRegistryEntry {
     val server =
       MockWebServer().apply {
@@ -337,6 +442,10 @@ class SidebarGatewayPickerTest {
   private fun choose(entry: GatewayRegistryEntry) {
     openPicker()
     gatewayItem(entry).performClick()
+    awaitFocus(entry)
+  }
+
+  private fun awaitFocus(entry: GatewayRegistryEntry) {
     composeRule.waitUntil {
       composeRule.runOnIdle {
         runtime.gatewayConnectionHandoff.value.let { !it.pending && it.focusedStableId == entry.stableId }
@@ -345,46 +454,55 @@ class SidebarGatewayPickerTest {
     composeRule.waitForIdle()
   }
 
-  private fun showSidebarAndComposer() {
+  private fun showSidebarAndComposer(
+    dark: Boolean = true,
+    fontScale: Float = 1f,
+    showComposer: Boolean = true,
+  ) {
     composeRule.setContent {
       if (mounted.value) {
         val connection by model.gatewayConnectionDisplay.collectAsState()
         val agents by model.gatewayAgents.collectAsState()
         val sessions by model.chatSessions.collectAsState()
         val sessionKey by model.chatSessionKey.collectAsState()
-        ClawDesignTheme {
-          Row(Modifier.fillMaxSize().testTag("gateway-proof")) {
-            Box(Modifier.width(300.dp)) {
-              OpenClawSidebar(
-                viewModel = model,
-                agents = agents,
-                selectedAgentId = null,
-                sessions = sessions,
-                activeSessionKey = sessionKey,
-                activeDestination = SidebarDestination.Home,
-                connection = connection,
-                visible = true,
-                showCloseButton = false,
-                onClose = {},
-                onDragActiveChange = {},
-                onNewSession = {},
-                onSelectAgent = {},
-                onSelectSession = {},
-                onSelectCatalogSession = {},
-                onCreateCatalogSession = {},
-                onSelectDestination = {},
-              )
-            }
-            Box(Modifier.weight(1f)) {
-              ChatScreen(
-                viewModel = model,
-                talkActive = false,
-                showSidebarButton = false,
-                onOpenSidebar = {},
-                onToggleTalk = {},
-                onOpenDashboard = {},
-                onOpenGatewaySettings = {},
-              )
+        val density = LocalDensity.current
+        CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+          ClawDesignTheme(dark = dark) {
+            Row(Modifier.fillMaxSize().testTag("gateway-proof")) {
+              Box(Modifier.width(300.dp)) {
+                OpenClawSidebar(
+                  viewModel = model,
+                  agents = agents,
+                  selectedAgentId = null,
+                  sessions = sessions,
+                  activeSessionKey = sessionKey,
+                  activeDestination = SidebarDestination.Home,
+                  connection = connection,
+                  visible = true,
+                  showCloseButton = false,
+                  onClose = {},
+                  onDragActiveChange = {},
+                  onNewSession = {},
+                  onSelectAgent = {},
+                  onSelectSession = {},
+                  onSelectCatalogSession = {},
+                  onCreateCatalogSession = {},
+                  onSelectDestination = {},
+                )
+              }
+              Box(Modifier.weight(1f)) {
+                if (showComposer) {
+                  ChatScreen(
+                    viewModel = model,
+                    talkActive = false,
+                    showSidebarButton = false,
+                    onOpenSidebar = {},
+                    onToggleTalk = {},
+                    onOpenDashboard = {},
+                    onOpenGatewaySettings = {},
+                  )
+                }
+              }
             }
           }
         }
