@@ -503,7 +503,6 @@ internal fun OpenClawSidebar(
   val recentSections = recentPresentation.recentSections
   val orderedPages = orderedSidebarDestinations(pageOrder)
   val visiblePageIdSet = visiblePageIds.toSet()
-  val connectionLabel = gatewayStatusLabel(connection)
   val setSessionPinned: (String, String?, Boolean) -> Unit = { key, ownerAgentId, pinned ->
     scope.launch {
       viewModel.patchChatSession(key = key, ownerAgentId = ownerAgentId, pinned = pinned)
@@ -941,14 +940,38 @@ internal fun OpenClawSidebar(
       }
     }
     HorizontalDivider(color = palette.hairline)
+    SidebarGatewayControl(viewModel, connection, palette) {
+      viewModel.openGatewaySettings()
+      onClose()
+    }
+  }
+}
+
+@Composable
+private fun SidebarGatewayControl(
+  viewModel: MainViewModel,
+  connection: GatewayConnectionDisplay,
+  palette: SidebarPalette,
+  openSettings: () -> Unit,
+) {
+  val entries by viewModel.pairedGateways.collectAsState()
+  val handoff by viewModel.gatewayConnectionHandoff.collectAsState()
+  val focused = entries.firstOrNull { it.stableId == handoff.focusedStableId }
+  var expanded by remember { mutableStateOf(false) }
+  val showsPicker = entries.size > 1
+  val connectionLabel = gatewayStatusLabel(connection)
+  val label = if (entries.isEmpty()) nativeString("Add Gateway") else focused?.name ?: nativeString("Gateways")
+  LaunchedEffect(showsPicker) { if (!showsPicker) expanded = false }
+  Box {
     Row(
       modifier =
         Modifier
           .fillMaxWidth()
           .heightIn(min = 48.dp)
-          .semantics(mergeDescendants = true) {
-            stateDescription = connectionLabel
-          }.padding(horizontal = 12.dp),
+          .testTag("sidebar-gateway-control")
+          .clickable(role = Role.Button) { if (showsPicker) expanded = true else openSettings() }
+          .semantics(mergeDescendants = true) { if (entries.isNotEmpty()) stateDescription = connectionLabel }
+          .padding(horizontal = 12.dp, vertical = 8.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -960,13 +983,28 @@ internal fun OpenClawSidebar(
             .background(if (connection.isConnected) ClawTheme.colors.success else palette.muted)
             .clearAndSetSemantics {},
       )
-      Text(
-        text = connectionLabel,
-        style = ClawTheme.type.caption,
-        color = palette.muted,
-        maxLines = 1,
-      )
+      Column(Modifier.weight(1f)) {
+        Text(label, style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium), color = palette.text, maxLines = 2)
+        if (entries.isNotEmpty()) {
+          Text(connectionLabel, style = ClawTheme.type.caption, color = palette.muted)
+        }
+      }
+      if (showsPicker) Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = palette.muted)
     }
+    FoldAwareDropdownMenu(
+      expanded = expanded && showsPicker,
+      onDismissRequest = { expanded = false },
+      items =
+        entries.map { entry ->
+          FoldAwareMenuItem(
+            id = "gateway:" + entry.stableId,
+            label = entry.name,
+            onClick = { viewModel.switchGatewayFromSidebar(entry.stableId) },
+            enabled = !handoff.pending,
+            selected = entry.stableId == handoff.focusedStableId,
+          )
+        } + FoldAwareMenuItem("manage-gateways", nativeString("Manage Gateways"), openSettings, Icons.Outlined.Settings),
+    )
   }
 }
 

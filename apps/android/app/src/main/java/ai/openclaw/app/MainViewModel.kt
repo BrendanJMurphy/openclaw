@@ -592,6 +592,8 @@ class MainViewModel private constructor(
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+  internal val gatewayConnectionHandoff: StateFlow<GatewayConnectionHandoff> =
+    runtimeState(initial = GatewayConnectionHandoff()) { it.gatewayConnectionHandoff }
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
@@ -1309,6 +1311,27 @@ class MainViewModel private constructor(
     }
   }
 
+  fun openGatewaySettings() {
+    requestedSettingsRouteState.value = SettingsRoute.Gateway
+    _requestedHomeDestination.value = HomeDestination.Settings
+  }
+
+  internal fun switchGatewayFromSidebar(stableId: String) {
+    val runtime = ensureRuntime()
+    // Read owners now; Compose's last enabled state is not admission authority.
+    if (stableId == runtime.gatewayConnectionHandoff.value.focusedStableId) return
+    if (runtime.gatewayConnectionHandoff.value.pending) return
+    if (chatComposerState.hasPendingGatewaySwitchWork(currentOrProvisionalChatComposerOwner())) {
+      Toast.makeText(nodeApp, nativeString("Finish importing media or wait for sending before switching gateways."), Toast.LENGTH_LONG).show()
+      return
+    }
+    launchGatewayConnectionOperation(quickSwitch = true) { owner, isCurrent ->
+      if (owner.switchToGateway(stableId, isCurrent) == GatewayTargetSelection.Unavailable) {
+        showUnavailableGateway(isCurrent)
+      }
+    }
+  }
+
   fun switchToGateway(stableId: String) {
     launchGatewayConnectionOperation { runtime, isCurrent ->
       if (runtime.switchToGateway(stableId, isCurrent) == GatewayTargetSelection.Unavailable) {
@@ -1343,16 +1366,40 @@ class MainViewModel private constructor(
     NodeForegroundService.stop(nodeApp)
   }
 
-  private fun launchGatewayConnectionOperation(action: suspend (NodeRuntime, NodeRuntime.GatewayConnectionOperation) -> Unit) {
-    val processIntent = resumeNodeServiceForConnection()
-    val sequence = gatewayConfigOperationSeq.incrementAndGet()
-    val isCurrent = { sequence == gatewayConfigOperationSeq.get() && processIntent() }
-    viewModelScope.launch(Dispatchers.Default) {
+  private fun launchGatewayConnectionOperation(
+    quickSwitch: Boolean = false,
+    action: suspend (NodeRuntime, NodeRuntime.GatewayConnectionOperation) -> Unit,
+  ) {
+    val createIntent = {
+      val processIntent = resumeNodeServiceForConnection()
+      val sequence = gatewayConfigOperationSeq.incrementAndGet()
+      val isCurrent = { sequence == gatewayConfigOperationSeq.get() && processIntent() }
+      isCurrent
+    }
+    // Preserve resume-before-startup for existing callers; a rejected quick switch has no service intent.
+    val existingCallerIntent = if (quickSwitch) null else createIntent()
+    // Publish owner-held admission before dispatch: returning Unit never means the handoff completed.
+    viewModelScope.launch(Dispatchers.Default, start = if (quickSwitch) CoroutineStart.UNDISPATCHED else CoroutineStart.DEFAULT) {
       val runtime = ensureRuntime()
-      val operation = runtime.beginGatewayConnectionOperation(isCurrent) ?: return@launch
+      val operation =
+        if (quickSwitch) {
+          runtime.beginQuickGatewayConnectionOperation(createIntent)
+        } else {
+          runtime.beginGatewayConnectionOperation(requireNotNull(existingCallerIntent))
+        }
+      if (operation == null) {
+        if (quickSwitch && runtime.hasActiveGatewaySwitchAudio()) {
+          withContext(Dispatchers.Main) {
+            Toast.makeText(nodeApp, nativeString("Finish recording or stop dictation or Talk before switching gateways."), Toast.LENGTH_LONG).show()
+          }
+        }
+        return@launch
+      }
       try {
-        gatewayConfigOperationMutex.withLock {
-          if (operation()) action(runtime, operation)
+        withContext(Dispatchers.Default) {
+          gatewayConfigOperationMutex.withLock {
+            if (operation()) action(runtime, operation)
+          }
         }
       } finally {
         runtime.finishGatewayConnectionOperation(operation, unlessHandedOff = true)
@@ -1820,9 +1867,11 @@ class MainViewModel private constructor(
   internal fun captureChatShareOwner(): ChatComposerOwner = currentOrProvisionalChatComposerOwner()
 
   internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
-    (
-      currentChatComposerOwner() ?: currentOrProvisionalChatComposerOwner()
-    ) == expected
+    runtimeRef.value
+      ?.gatewayConnectionHandoff
+      ?.value
+      ?.pending != true &&
+      (currentChatComposerOwner() ?: currentOrProvisionalChatComposerOwner()) == expected
 
   internal fun createProviderAuthController(owner: ChatComposerOwner): ProviderAuthController? {
     val runtime = ensureRuntime()

@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MenuDefaults
@@ -37,6 +39,8 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
@@ -63,6 +67,7 @@ internal data class FoldAwareMenuItem(
   val icon: ImageVector? = null,
   val enabled: Boolean = true,
   val interactionSource: MutableInteractionSource? = null,
+  val selected: Boolean? = null,
 )
 
 /** Activity-hosted, non-nested menu. The surrounding Box is its stationary anchor. */
@@ -146,6 +151,8 @@ private fun MenuBody(
       content = {
         items.forEach { item ->
           DropdownMenuItem(
+            modifier = Modifier.semantics { item.selected?.let { selected = it } },
+            trailingIcon = if (item.selected == true) ({ Icon(Icons.Default.Check, contentDescription = null) }) else null,
             text = {
               Text(item.label, onTextLayout = { opening.textLayouts[item.id] = it })
             },
@@ -235,10 +242,17 @@ private data class MenuGeometry(
   val display: Int,
 )
 
+private data class MenuItemLayout(
+  val id: String,
+  val label: String,
+  val icon: ImageVector?,
+  val checked: Boolean,
+)
+
 private class MenuOpening(
   val owner: AnchoredMenuOwner,
   val geometry: MenuGeometry,
-  val items: List<Triple<String, String, ImageVector?>>,
+  val items: List<MenuItemLayout>,
 ) : PopupPositionProvider {
   var terminal = false
   var notified = false
@@ -372,7 +386,7 @@ private class AnchoredMenuOwner {
     if (!valid(current, geometry())) cancel(current)
   }
 
-  private fun itemLayout() = items.map { Triple(it.id, it.label, it.icon) }
+  private fun itemLayout() = items.map { MenuItemLayout(it.id, it.label, it.icon, it.selected == true) }
 
   private fun valid(
     current: MenuOpening,
