@@ -144,6 +144,7 @@ export type SessionListRow = {
 export function resolveSessionToolContext(opts?: {
   agentId?: string;
   agentSessionKey?: string;
+  sessionReadScopeKey?: string;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -152,13 +153,14 @@ export function resolveSessionToolContext(opts?: {
   return {
     cfg,
     a2aPolicy: createAgentToAgentPolicy(cfg),
-    sessionVisibility: resolveEffectiveSessionToolsVisibility({
-      cfg,
-      sandboxed: opts?.sandboxed === true,
-    }),
+    // Only read-tool constructors accept this host-bound scope. The temporary
+    // auxiliary run keeps its execution identity but can read just the observed session.
+    sessionVisibility: opts?.sessionReadScopeKey
+      ? ("self" as const)
+      : resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: opts?.sandboxed === true }),
     ...resolveSandboxedSessionToolContext({
       cfg,
-      agentSessionKey: opts?.agentSessionKey,
+      agentSessionKey: opts?.sessionReadScopeKey ?? opts?.agentSessionKey,
       requesterAgentId: opts?.requesterAgentIdOverride ?? opts?.agentId,
       sandboxed: opts?.sandboxed,
     }),
