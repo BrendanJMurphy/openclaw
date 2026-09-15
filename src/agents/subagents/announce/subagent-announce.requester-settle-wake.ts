@@ -461,7 +461,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     finalizeRequesterAttachment(batchRunIds, selectedState);
     return false;
   }
-  const findings = await readChildCompletionFindings(completionRows);
+  const preparedFindings = await readChildCompletionFindings(completionRows);
+  const findings = preparedFindings.text;
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
   // The scheduling row need not be the rerouted child. Keep every current
@@ -607,6 +608,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     };
     const isSourceSessionEffectsAllowed = () =>
       !params.signal?.aborted &&
+      preparedFindings.isCurrent() &&
       !isGatewayClosed() &&
       isBatchCurrent() &&
       isRequesterCurrent() &&

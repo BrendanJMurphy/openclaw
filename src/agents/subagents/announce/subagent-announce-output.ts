@@ -1,4 +1,3 @@
-import path from "node:path";
 import { formatCompactTokenCount } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 /**
@@ -6,7 +5,6 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
  *
  * Reads child session output, detects waiting states, and formats completion findings for announcements.
  */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { readSessionArchiveContentSync } from "../../../config/sessions/archive-compression.js";
@@ -22,10 +20,6 @@ import { listSessionTranscriptArchivesReadOnly } from "../../../config/sessions/
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import {
-  readSessionTranscriptRunId,
-  resolveTerminalAssistantTranscriptRunId,
-} from "../../../sessions/transcript-events.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
@@ -42,6 +36,11 @@ import {
   captureSubagentCompletionReplyUsing,
   readLatestSubagentOutputWithRetryUsing,
 } from "./subagent-announce-capture.js";
+import {
+  readSubagentRunAnnounceResultUsing,
+  type PreparedAnnounceResult,
+  type SubagentAnnounceResultDeps,
+} from "./subagent-announce-result.js";
 import {
   callSubagentLifecycleGateway,
   getRuntimeConfig,
@@ -61,18 +60,9 @@ const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
   "functionCall",
   "function_call",
 ]);
-type SubagentAnnounceOutputDeps = {
-  findTranscriptEvent: typeof findTranscriptEvent;
-  listSessionTranscriptArchivesReadOnly: typeof listSessionTranscriptArchivesReadOnly;
-  readSessionArchiveContentSync: typeof readSessionArchiveContentSync;
-  resolveSqliteTranscriptArchiveDirectory: typeof resolveSqliteTranscriptArchiveDirectory;
-  resolveSqliteTranscriptReadScope: typeof resolveSqliteTranscriptReadScope;
+type SubagentAnnounceOutputDeps = SubagentAnnounceResultDeps & {
   callGateway: typeof callSubagentLifecycleGateway;
-  getRuntimeConfig: typeof getRuntimeConfig;
-  readSubagentSessionEntry: typeof readSubagentSessionEntry;
   readSessionMessagesAsync: typeof readSessionMessagesAsync;
-  resolveAgentIdFromSessionKey: typeof resolveAgentIdFromSessionKey;
-  resolveSessionStorePathCore: typeof resolveSessionStorePathCore;
 };
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
@@ -418,107 +408,42 @@ export async function captureSubagentCompletionReply(
   });
 }
 
-/** Read the final assistant message from the transcript identity owned by this run. */
 export async function readSubagentRunAnnounceResult(
-  child: Pick<SubagentRunRecord, "runId" | "childSessionKey" | "execution" | "completion">,
-): Promise<string | undefined> {
-  if (
-    child.completion?.terminalReply?.disposition !== "visible" ||
-    child.execution.outcome?.status !== "ok"
-  ) {
-    return resolveSubagentCompletionResultText(child);
-  }
-  const runId = child.runId;
-  const childSessionKey = child.childSessionKey;
-  const target = child.execution.transcriptTarget;
-  const targetIdentity = target ? { ...target } : undefined;
-  const agentId =
-    target?.agentId ?? subagentAnnounceOutputDeps.resolveAgentIdFromSessionKey(childSessionKey);
-  const storePath =
-    target?.storePath ??
-    subagentAnnounceOutputDeps.resolveSessionStorePathCore(
-      subagentAnnounceOutputDeps.getRuntimeConfig().session?.store,
-      { agentId },
-    );
-  const sessionKey = target?.sessionKey ?? childSessionKey;
-  const sessionId =
-    target?.sessionId ??
-    subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, sessionKey)?.sessionId;
-  const scope = { agentId, storePath, sessionKey };
-  const matchesRun = (event: unknown) =>
-    isRecord(event) &&
-    isRecord(event.message) &&
-    readSessionTranscriptRunId(event.message) === runId &&
-    resolveTerminalAssistantTranscriptRunId(event.message, runId) !== undefined;
-  const found = sessionId
-    ? await subagentAnnounceOutputDeps.findTranscriptEvent({ ...scope, sessionId }, matchesRun)
-    : undefined;
-  let event: unknown = found?.event;
-  if (!event) {
-    // Delete cleanup archives the transcript before requester settlement. Its
-    // registered session identity and stored run id still identify this answer.
-    const archives = subagentAnnounceOutputDeps
-      .listSessionTranscriptArchivesReadOnly({
-        ...scope,
-        sessionIds: [sessionId ?? sessionKey],
-      })
-      .filter((archive) =>
-        sessionId ? archive.sessionId === sessionId : archive.sessionKey === sessionKey,
-      )
-      .toReversed();
-    for (const archive of archives) {
-      const directory = subagentAnnounceOutputDeps.resolveSqliteTranscriptArchiveDirectory(
-        subagentAnnounceOutputDeps.resolveSqliteTranscriptReadScope({
-          ...scope,
-          sessionId: archive.sessionId,
-        }),
-      );
-      const events: unknown[] = subagentAnnounceOutputDeps
-        .readSessionArchiveContentSync(path.join(directory, archive.archiveName))
-        .split("\n")
-        .filter((line) => line.trim())
-        .map((line) => JSON.parse(line));
-      const header = events[0];
-      if (!isRecord(header) || header.type !== "session" || header.id !== archive.sessionId) {
-        throw new Error(
-          "The completed child run's archive does not match its transcript identity.",
-        );
-      }
-      event = events.findLast(matchesRun);
-      if (event) {
-        break;
-      }
-    }
-  }
-  const currentTarget = child.execution.transcriptTarget;
-  if (
-    child.runId !== runId ||
-    child.childSessionKey !== childSessionKey ||
-    currentTarget !== target ||
-    currentTarget?.sessionId !== targetIdentity?.sessionId ||
-    currentTarget?.agentId !== targetIdentity?.agentId ||
-    currentTarget?.storePath !== targetIdentity?.storePath
-  ) {
-    throw new Error("The completed child run's transcript identity changed during announcement.");
-  }
-  const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
-  if (!answer) {
-    throw new Error("The completed child run's final answer is unavailable in its transcript.");
-  }
-  return answer;
+  child: Parameters<typeof readSubagentRunAnnounceResultUsing>[0],
+): Promise<PreparedAnnounceResult> {
+  return await readSubagentRunAnnounceResultUsing(child, subagentAnnounceOutputDeps);
 }
 
 /** Prepare complete result text without changing the bounded lifecycle evidence. */
 export async function readChildCompletionFindings(
   children: SubagentRunRecord[],
-): Promise<string | undefined> {
+): Promise<PreparedAnnounceResult> {
   const results = await Promise.all(
     children.map(async (child) => ({
-      ...child,
-      announceResult: await readSubagentRunAnnounceResult(child),
+      child,
+      ...(await readSubagentRunAnnounceResult(child)),
     })),
   );
-  return buildChildCompletionFindings(results);
+  const isCurrent = () => results.every((result) => result.isCurrent());
+  if (!isCurrent()) {
+    throw new Error("A child result changed while preparing the completion batch.");
+  }
+  return {
+    text: buildChildCompletionFindings(
+      results.map(({ child, text }) => ({
+        childSessionKey: child.childSessionKey,
+        task: child.task,
+        taskName: child.taskName,
+        label: child.label,
+        createdAt: child.createdAt,
+        execution: child.execution,
+        endedReason: child.endedReason,
+        completion: child.completion,
+        announceResult: text,
+      })),
+    ),
+    isCurrent,
+  };
 }
 
 function describeSubagentOutcome(child: ChildCompletionRow): string {

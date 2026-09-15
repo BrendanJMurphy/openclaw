@@ -236,7 +236,12 @@ async function runSubagentAnnounceFlowBound(
   const childSessionEffectsAllowed = () =>
     params.suppressChildSessionEffects !== true &&
     params.isChildSessionEffectsAllowed?.() !== false;
-  const completionDeliveryAllowed = () => params.isCompletionDeliveryAllowed?.() !== false;
+  let isOwnResultCurrent = () => true;
+  let isChildResultsCurrent = () => true;
+  const completionDeliveryAllowed = () =>
+    params.isCompletionDeliveryAllowed?.() !== false &&
+    isOwnResultCurrent() &&
+    isChildResultsCurrent();
   let childSessionId: string | undefined;
   let childSessionLifecycleRevision: string | undefined;
   try {
@@ -345,7 +350,9 @@ async function runSubagentAnnounceFlowBound(
     }
 
     if (childCompletionRows) {
-      childCompletionFindings = await readChildCompletionFindings(childCompletionRows);
+      const prepared = await readChildCompletionFindings(childCompletionRows);
+      childCompletionFindings = prepared.text;
+      isChildResultsCurrent = prepared.isCurrent;
     }
 
     const announceId = buildAnnounceIdFromChildRun({
@@ -396,7 +403,9 @@ async function runSubagentAnnounceFlowBound(
     if (!childCompletionFindings || hasPrivateChildCompletion) {
       const childRun = getLatestSubagentRunByChildSessionKey(params.childSessionKey);
       if (childSessionEffectsAllowed() && childRun?.runId === params.childRunId) {
-        reply = await readSubagentRunAnnounceResult(childRun);
+        const prepared = await readSubagentRunAnnounceResult(childRun);
+        reply = prepared.text;
+        isOwnResultCurrent = prepared.isCurrent;
       }
 
       if (params.terminalReply?.disposition === "silent") {
