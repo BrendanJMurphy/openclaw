@@ -332,10 +332,12 @@ describe("openai completions transport requests", () => {
           { messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }], tools: [] },
           { apiKey: "test-key", sessionId: "session-123", ...options },
         );
-        for await (const _event of stream) {
-          // Drain until the captured request fails.
+        const eventTypes: string[] = [];
+        for await (const event of stream) {
+          eventTypes.push(event.type);
         }
 
+        expect(eventTypes).toContain("error");
         expect(captured).toEqual(expected);
       } finally {
         await new Promise<void>((resolve, reject) => {
