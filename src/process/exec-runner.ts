@@ -192,7 +192,7 @@ async function runCommandWithOutputEncoding(
     MAX_PRESERVED_PENDING_LINE_BYTES,
   );
   const maxPreservedOutputLines = Math.max(0, Math.floor(options.maxPreservedOutputLines ?? 16));
-  const windowsEncoding = forceUtf8 ? null : resolveWindowsConsoleEncoding();
+  const windowsEncoding = raw ? resolveWindowsConsoleEncoding() : null;
   const cancelController = new AbortController();
   let termination: CommandTerminationReason | undefined;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | undefined;
@@ -612,11 +612,7 @@ async function runCommandWithOutputEncoding(
     ? { ...settled, stdout, stderr, windowsEncoding }
     : {
         ...settled,
-        stdout: forceUtf8
-          ? stdout.toString("utf8")
-          : decodeWindowsOutputBuffer({ buffer: stdout, windowsEncoding }),
-        stderr: forceUtf8
-          ? stderr.toString("utf8")
-          : decodeWindowsOutputBuffer({ buffer: stderr, windowsEncoding }),
+        stdout: forceUtf8 ? stdout.toString("utf8") : decodeWindowsOutputBuffer({ buffer: stdout }),
+        stderr: forceUtf8 ? stderr.toString("utf8") : decodeWindowsOutputBuffer({ buffer: stderr }),
       };
 }
