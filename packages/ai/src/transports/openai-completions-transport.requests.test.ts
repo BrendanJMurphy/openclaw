@@ -259,4 +259,89 @@ describe("openai completions transport requests", () => {
       });
     }
   });
+
+  it.each([
+    {
+      name: "OpenAI-format",
+      compat: { sendSessionAffinityHeaders: true },
+      expected: {
+        session_id: "session-123",
+        "x-client-request-id": "session-123",
+        "x-session-affinity": "session-123",
+      },
+    },
+    {
+      name: "OpenRouter-format",
+      compat: { sendSessionAffinityHeaders: true, thinkingFormat: "openrouter" as const },
+      expected: { "x-session-id": "session-123" },
+    },
+    {
+      name: "no",
+      compat: { sendSessionAffinityHeaders: true },
+      cacheRetention: "none" as const,
+      expected: {},
+    },
+    {
+      name: "caller-overridden",
+      compat: { sendSessionAffinityHeaders: true },
+      headers: { "x-session-affinity": "caller-pin" },
+      expected: {
+        session_id: "session-123",
+        "x-client-request-id": "session-123",
+        "x-session-affinity": "caller-pin",
+      },
+    },
+  ])(
+    "sends $name session-affinity headers on the wire",
+    async ({ compat, expected, ...options }) => {
+      const affinityHeaderNames = [
+        "session_id",
+        "x-client-request-id",
+        "x-session-affinity",
+        "x-session-id",
+      ];
+      const captured: Record<string, string> = {};
+      const server = createServer((request, response) => {
+        for (const name of affinityHeaderNames) {
+          const value = request.headers[name];
+          if (typeof value === "string") {
+            captured[name] = value;
+          }
+        }
+        request.resume();
+        request.on("end", () => {
+          response.writeHead(400, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: { message: "headers captured" } }));
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+        const model = makeCompletionsModel({
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          compat,
+        });
+        const stream = await createOpenAICompletionsTransportStreamFn()(
+          model,
+          { messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }], tools: [] },
+          { apiKey: "test-key", sessionId: "session-123", ...options },
+        );
+        for await (const _event of stream) {
+          // Drain until the captured request fails.
+        }
+
+        expect(captured).toEqual(expected);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
 });

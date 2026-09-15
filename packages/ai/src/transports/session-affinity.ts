@@ -1,4 +1,5 @@
 import type { Model, StreamOptions } from "../types.js";
+import type { ResolvedOpenAICompletionsCompat } from "./openai-completions-compat.js";
 
 function isOpencodeEndpoint(baseUrl: string): boolean {
   try {
@@ -30,4 +31,25 @@ export function hasOpencodeSessionHeader(
   return [model.headers, options?.headers].some((headers) =>
     Object.keys(headers ?? {}).some((name) => name.toLowerCase() === "x-opencode-session"),
   );
+}
+
+/**
+ * Opt-in Chat Completions routing affinity. Callers pass the cache session id,
+ * so `cacheRetention: "none"` sends none of these headers.
+ */
+export function resolveOpenAICompletionsSessionAffinityHeaders(
+  compat: Pick<ResolvedOpenAICompletionsCompat, "sessionAffinity">,
+  sessionId: string | undefined,
+): Record<string, string> {
+  if (!sessionId || compat.sessionAffinity === "none") {
+    return {};
+  }
+  if (compat.sessionAffinity === "openrouter") {
+    return { "x-session-id": sessionId };
+  }
+  return {
+    session_id: sessionId,
+    "x-client-request-id": sessionId,
+    "x-session-affinity": sessionId,
+  };
 }

@@ -7,6 +7,7 @@ import {
   reasoningTagTextPolicy,
   type OpenAICompletionsOptions,
 } from "../provider-options.js";
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { tagUnresolvedTextAsCommentary } from "../utils/assistant-text-phase.js";
 import {
@@ -41,7 +42,10 @@ import {
   filterProviderTurnHeadersForExplicitOpencodeSession,
   resolveProviderTransportTurnState,
 } from "./provider-transport-turn-state.js";
-import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
+import {
+  resolveOpenAICompletionsSessionAffinityHeaders,
+  resolveOpencodeSessionHeaders,
+} from "./session-affinity.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
@@ -213,6 +217,15 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           transport: "stream",
         });
         const optionHeaders = resolveOpencodeSessionHeaders(model, options);
+        const cacheSessionId =
+          resolveCacheRetention(options?.cacheRetention) === "none"
+            ? undefined
+            : options?.sessionId;
+        const compat = getCompat(model as OpenAIModeModel);
+        const sessionAffinityHeaders = resolveOpenAICompletionsSessionAffinityHeaders(
+          compat,
+          cacheSessionId,
+        );
         const turnHeaders = filterProviderTurnHeadersForExplicitOpencodeSession(
           model,
           options,
@@ -251,7 +264,8 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           model,
           context,
           apiKey,
-          { ...turnHeaders, ...optionHeaders },
+          // Affinity overrides provider defaults; explicit caller headers still win.
+          { ...sessionAffinityHeaders, ...turnHeaders, ...optionHeaders },
           {
             fetch: doneDetectingFetch,
           },
@@ -278,7 +292,6 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           );
           assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
-        const compat = getCompat(model as OpenAIModeModel);
         if (compat.requiresNonEmptyUserOrAssistantMessage) {
           assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }

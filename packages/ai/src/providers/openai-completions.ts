@@ -16,6 +16,7 @@ import {
   isOpenAICompletionsThinkingEnabled,
 } from "../transports/openai-transport-shared.js";
 import { resolveProviderSimpleCompletionHeaders } from "../transports/provider-transport-turn-state.js";
+import { resolveOpenAICompletionsSessionAffinityHeaders } from "../transports/session-affinity.js";
 import {
   assignTransportErrorDetails,
   transportAbortError,
@@ -263,15 +264,7 @@ function createClient(
     Object.assign(headers, copilotHeaders);
   }
 
-  if (sessionId && compat.sessionAffinity !== "none") {
-    if (compat.sessionAffinity === "openrouter") {
-      headers["x-session-id"] = sessionId;
-    } else {
-      headers.session_id = sessionId;
-      headers["x-client-request-id"] = sessionId;
-      headers["x-session-affinity"] = sessionId;
-    }
-  }
+  Object.assign(headers, resolveOpenAICompletionsSessionAffinityHeaders(compat, sessionId));
 
   return createOpenAIProviderClient(model, apiKey, headers, optionsHeaders);
 }
