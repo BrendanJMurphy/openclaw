@@ -4758,7 +4758,7 @@ class NodeRuntime private constructor(
     }
   }
 
-  /** Admit quick switching atomically with microphone ownership, before the ViewModel queue. */
+  /** NodeApp holds service control before this lifecycle/microphone admission, matching Stop's lock order. */
   internal fun beginQuickGatewayConnectionOperation(
     createIntent: () -> (() -> Boolean),
   ): GatewayConnectionOperation? =

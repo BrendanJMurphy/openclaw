@@ -101,6 +101,9 @@ import org.robolectric.shadows.ShadowToast
 import org.robolectric.util.ReflectionHelpers
 import java.io.File
 import java.net.InetAddress
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /** Real sidebar, ViewModel/runtime and composer; no replacement picker is installed on the base. */
 @RunWith(RobolectricTestRunner::class)
@@ -406,6 +409,85 @@ class SidebarGatewayPickerTest {
       model.acknowledgeChatComposerSendAdmission(owner, send.commandId)
     }
     choose(beta)
+  }
+
+  @Test
+  fun quickSwitchDoesNotHoldRuntimeAdmissionWhileWaitingForServiceControl() {
+    val alpha = savedGateway("Local QA Alpha")
+    val beta = savedGateway("Local QA Beta")
+    focus(alpha)
+    showSidebarAndComposer(showComposer = false)
+    awaitFocus(alpha)
+    val serviceControl = ReflectionHelpers.getField<Any>(app, "nodeServiceControlLock")
+    val runtimeAdmission = ReflectionHelpers.getField<Any>(runtime, "gatewayLifecycleIntentLock")
+    val runtimeAvailable = CountDownLatch(1)
+    val failure = AtomicReference<Throwable?>()
+    val quickSwitch =
+      Thread {
+        try {
+          model.switchGatewayFromSidebar(beta.stableId)
+        } catch (error: Throwable) {
+          failure.set(error)
+        }
+      }.apply { isDaemon = true }
+    val cleanupProbe =
+      Thread { synchronized(runtimeAdmission) { runtimeAvailable.countDown() } }
+        .apply { isDaemon = true }
+    var admittedCleanup = false
+    try {
+      synchronized(serviceControl) {
+        quickSwitch.start()
+        // Stop cleanup owns this monitor. Wait for actual contention, not just thread startup.
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+          quickSwitch.state == Thread.State.BLOCKED &&
+            quickSwitch.stackTrace.firstOrNull()?.className == NodeApp::class.java.name
+        }
+        cleanupProbe.start()
+        admittedCleanup = runtimeAvailable.await(1, TimeUnit.SECONDS)
+      }
+    } finally {
+      // Release the simulated Stop monitor before joining either contender, including on failure.
+      quickSwitch.join(5_000)
+      cleanupProbe.join(5_000)
+    }
+    failure.get()?.let { throw AssertionError("Quick switch failed", it) }
+    assertFalse("Quick-switch worker must finish", quickSwitch.isAlive)
+    assertFalse("Cleanup probe must finish", cleanupProbe.isAlive)
+    assertTrue("Stop cleanup must be able to enter runtime admission while service control is held", admittedCleanup)
+    awaitFocus(beta)
+  }
+
+  @Test
+  fun completedSendReceiptDoesNotBlockQuickSwitchWithoutAChatScreen() {
+    val alpha = savedGateway("Local QA Alpha")
+    val beta = savedGateway("Local QA Beta")
+    focus(alpha)
+    showSidebarAndComposer(showComposer = false)
+    awaitFocus(alpha)
+    val owner = model.captureChatShareOwner()
+    composeRule.runOnIdle {
+      model.chatComposerState.textDrafts[owner] = "Admitted before leaving Chat"
+      val send = requireNotNull(model.chatComposerState.beginSend(owner).request)
+      model.chatComposerState.completeSend(send, true)
+      val completed = requireNotNull(model.chatComposerState.sendStates.value[owner])
+      assertTrue(completed.activeOperationIds.isEmpty())
+      assertEquals(setOf(send.commandId), completed.pendingAdmissionIds)
+    }
+    openPicker()
+    gatewayItem(beta).performClick()
+    composeRule.runOnIdle {
+      val handoff = runtime.gatewayConnectionHandoff.value
+      assertTrue("A completed send's UI receipt must not block Gateway navigation", handoff.pending || handoff.focusedStableId == beta.stableId)
+    }
+    awaitFocus(beta)
+    composeRule.runOnIdle {
+      assertTrue(
+        "The receipt stays owned by the absent Chat screen",
+        model.chatComposerState.sendStates.value[owner]
+          ?.pendingAdmissionIds
+          ?.isNotEmpty() == true,
+      )
+    }
   }
 
   @Test

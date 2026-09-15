@@ -103,10 +103,12 @@ internal class ChatComposerStateStore(
 
   fun hasPendingImport(owner: ChatComposerOwner): Boolean = synchronized(lock) { attachmentStore.hasPendingImport(owner) }
 
-  /** Finished drafts/attachments stay with their owner; only unsettled acquisition/admission blocks leaving. */
+  /** Only unsettled work blocks leaving; completed send receipts await their UI without holding navigation. */
   fun hasPendingGatewaySwitchWork(owner: ChatComposerOwner): Boolean =
     synchronized(lock) {
-      hasSendGateLocked(owner) || attachmentStore.hasPendingImport(owner) || mediaOwners.containsValue(owner)
+      sendStatesState.value[owner]?.activeOperationIds?.isNotEmpty() == true ||
+        attachmentStore.hasPendingImport(owner) ||
+        mediaOwners.containsValue(owner)
     }
 
   fun beginSend(owner: ChatComposerOwner): ChatComposerSendStart =

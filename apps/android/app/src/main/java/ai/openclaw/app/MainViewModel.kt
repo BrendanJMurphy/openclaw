@@ -1384,7 +1384,7 @@ class MainViewModel private constructor(
       val runtime = ensureRuntime()
       val operation =
         if (quickSwitch) {
-          runtime.beginQuickGatewayConnectionOperation(createIntent)
+          nodeApp.beginQuickGatewayConnectionOperation(runtime, createIntent)
         } else {
           runtime.beginGatewayConnectionOperation(requireNotNull(existingCallerIntent))
         }
