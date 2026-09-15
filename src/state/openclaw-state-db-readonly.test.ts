@@ -21,10 +21,6 @@ import {
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
 import {
-  hasDanglingSkillWorkshopCollectionReviewIndex,
-  openDanglingWorkshopIndexReadAdmission,
-} from "./openclaw-state-db-dangling-workshop-index.js";
-import {
   withSynchronousArtifactPreservingStateSnapshot,
   isArtifactPreservingStateRead,
   iterateOpenClawStateDatabaseReadOnly,
@@ -38,6 +34,7 @@ import {
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 
 function createOptions(stateDir: string) {
@@ -75,14 +72,15 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
-  "keeps prepared statements reusable across cached state reads",
-  async () => {
+it
+  .skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")
+  .each(["read", "write"] as const)(
+  "keeps prepared statements reusable across cached state %s operations",
+  async (mode) => {
     await withTempDir("openclaw-state-readonly-statements-", async (root) => {
       const options = createOptions(root);
       const { db } = openOpenClawStateDatabase(options);
       db.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('original')");
-      withExistingOpenClawStateDatabaseReadOnly(() => undefined, options);
       let compilations = 0;
       db.setAuthorizer((action, table, column) => {
         if (action === constants.SQLITE_READ && table === "held" && column === "value") {
@@ -95,9 +93,11 @@ it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
         expect(statement.get()).toEqual({ value: "original" });
         expect(compilations).toBe(1);
         for (let index = 0; index < 3; index++) {
-          expect(withExistingOpenClawStateDatabaseReadOnly(() => statement.get(), options)).toEqual(
-            { value: "original" },
-          );
+          const value =
+            mode === "read"
+              ? withExistingOpenClawStateDatabaseReadOnly(() => statement.get(), options)
+              : runOpenClawStateWriteTransaction(() => statement.get(), options);
+          expect(value).toEqual({ value: "original" });
         }
         expect(compilations).toBe(1);
       } finally {
@@ -117,51 +117,6 @@ it("keeps fresh synchronous read callbacks from returning asynchronous work", as
     ).toThrow("SQLite source read must remain synchronous");
     const exclusion = await acquireOpenClawStateDatabaseFileExclusion(options.path);
     exclusion.release();
-  });
-});
-
-it("rechecks a reused schema cookie after rollback and an external schema change", async () => {
-  await withTempDir("openclaw-state-readonly-schema-cookie-", async (root) => {
-    const pathname = path.join(root, "state.sqlite");
-    const database = new DatabaseSync(pathname);
-    try {
-      database.exec(
-        "CREATE TABLE skill_workshop_collection_reviews(review_id TEXT PRIMARY KEY, owner_agent_id TEXT NOT NULL, create_time INTEGER NOT NULL)",
-      );
-      expect(hasDanglingSkillWorkshopCollectionReviewIndex(database)).toBe(false);
-      database.exec(
-        "BEGIN; CREATE TABLE transient(value TEXT); CREATE INDEX transient_value ON transient(value)",
-      );
-      const rolledBackVersion = database
-        .prepare("PRAGMA main.schema_version")
-        .get()?.schema_version;
-      expect(hasDanglingSkillWorkshopCollectionReviewIndex(database)).toBe(false);
-      database.exec("ROLLBACK");
-      const writer = new DatabaseSync(pathname);
-      try {
-        installDanglingWorkshopReviewIndex(writer);
-      } finally {
-        writer.close();
-      }
-      expect(database.prepare("PRAGMA main.schema_version").get()?.schema_version).toBe(
-        rolledBackVersion,
-      );
-      const before = fs.readFileSync(pathname);
-      expect(hasDanglingSkillWorkshopCollectionReviewIndex(database)).toBe(true);
-      const closeAdmission = openDanglingWorkshopIndexReadAdmission(database);
-      try {
-        expect(closeAdmission).toBeTypeOf("function");
-        expect(
-          database.prepare("SELECT review_id FROM skill_workshop_collection_reviews").all(),
-        ).toEqual([]);
-      } finally {
-        closeAdmission?.();
-      }
-      expect(database.prepare("PRAGMA writable_schema").get()?.writable_schema).toBe(0);
-      expect(fs.readFileSync(pathname)).toEqual(before);
-    } finally {
-      database.close();
-    }
   });
 });
 
@@ -411,7 +366,7 @@ describe.each(["admission", "explicit", "async"] as const)("%s read-only state r
       expect(fs.readFileSync(options.path)).toEqual(before);
     });
   });
-  it("reads through the exact dangling Workshop index without changing its source", async () => {
+  it("requires Doctor before reading a dangling Workshop index without changing its source", async () => {
     await withTempDir("openclaw-state-readonly-dangling-workshop-", async (stateDir) => {
       const options = createOptions(stateDir);
       const opened = openOpenClawStateDatabase(options);
@@ -424,9 +379,10 @@ describe.each(["admission", "explicit", "async"] as const)("%s read-only state r
       }
       const before = fs.readFileSync(options.path);
 
-      expect(
-        await readState(({ db }) => db.prepare("SELECT role FROM schema_meta").get(), options),
-      ).toEqual({ role: "global" });
+      await expect(
+        async () =>
+          await readState(({ db }) => db.prepare("SELECT role FROM schema_meta").get(), options),
+      ).rejects.toThrow(/malformed database schema/u);
       expect(fs.readFileSync(options.path)).toEqual(before);
     });
   });

@@ -15,11 +15,14 @@ import {
   repairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexes,
 } from "../infra/sqlite-index-schema.js";
-import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { assertSqliteIntegrity, assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
-import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   StateSchemaMutationConflictError,
@@ -63,6 +66,7 @@ import {
   writeCurrentStateSchemaMetadata,
   executeCanonicalStateSchema,
   prepareStateDatabaseSchemaRepair,
+  openStateDatabaseDoctorOwnershipReadAdmission,
 } from "./openclaw-state-db-maintenance.js";
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
@@ -141,23 +145,44 @@ const deferredStateDatabases = new WeakSet<DatabaseSync>();
 function repairStateSchema(
   pathname: string,
   env: NodeJS.ProcessEnv,
+  scope: "schema" | "catalog" = "schema",
 ): {
   changes: string[];
   warnings: string[];
 } {
-  ensureOpenClawStatePermissions(pathname, env);
+  let repairing = scope === "schema";
+  if (repairing) {
+    ensureOpenClawStatePermissions(pathname, env);
+  }
   const db = openNodeSqliteDatabase(pathname);
   const rebuiltIndexNames = new Set<string>();
   let ownershipRefused = false;
   try {
     db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-    const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(db, pathname, env);
+    const schemaRepair = prepareStateDatabaseSchemaRepair(db, pathname, env);
+    if (scope === "catalog") {
+      if (!schemaRepair.needsCatalogRepair) {
+        return { changes: [], warnings: [] };
+      }
+      repairing = true;
+      ensureOpenClawStatePermissions(pathname, env);
+    }
     db.exec("PRAGMA foreign_keys = OFF;");
-    const changes = runStateSchemaMigrationTransaction(
-      db,
-      pathname,
+    const runRepairTransaction =
+      scope === "catalog"
+        ? (operation: () => string[], options: SqliteTransactionOptions) =>
+            runSqliteImmediateTransactionSync(db, operation, options)
+        : (operation: () => string[], options: SqliteTransactionOptions) =>
+            runStateSchemaMigrationTransaction(db, pathname, operation, options);
+    const changes = runRepairTransaction(
       () => {
-        const applied = repairAdmittedSchema();
+        const applied = schemaRepair.repair();
+        if (scope === "catalog") {
+          assertOpenClawStateDatabaseOwner(db, { pathname });
+          // Unrelated repairable state belongs to the later full schema step.
+          assertSqliteTableIntegrity(db, pathname, "skill_workshop_collection_reviews");
+          return applied;
+        }
         applied.push(...recoverOrphanTaskDeliveryRows(db, pathname));
         const previousVersion = readStateSchemaMigrationVersion(db);
         const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");
@@ -299,13 +324,16 @@ function repairStateSchema(
       // discard the diagnostic warnings returned by the catch above.
       db.close();
     }
-    if (!ownershipRefused) {
+    if (repairing && !ownershipRefused) {
       ensureOpenClawStatePermissions(pathname, env);
     }
   }
 }
 
-export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
+export function repairOpenClawStateDatabaseSchema(
+  options: OpenClawStateDatabaseOptions = {},
+  scope: "schema" | "catalog" = "schema",
+): {
   changes: string[];
   warnings: string[];
 } {
@@ -315,9 +343,16 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     return { changes: [], warnings: [] };
   }
   return runWithOpenClawStateWriteAccess(
-    { databasePath: pathname, env },
+    {
+      databasePath: pathname,
+      env,
+      schemaReadAdmission: openStateDatabaseDoctorOwnershipReadAdmission,
+    },
     "state schema repair",
-    () => withStateSchemaFence({ databasePath: pathname }, () => repairStateSchema(pathname, env)),
+    () =>
+      withStateSchemaFence({ databasePath: pathname }, () =>
+        repairStateSchema(pathname, env, scope),
+      ),
   );
 }
 
@@ -335,7 +370,11 @@ export function repairOpenClawStateDatabaseSchemaIfNeeded(
   }
 
   return runWithOpenClawStateWriteAccess(
-    { databasePath: pathname, env },
+    {
+      databasePath: pathname,
+      env,
+      schemaReadAdmission: openStateDatabaseDoctorOwnershipReadAdmission,
+    },
     "state schema repair preflight/repair",
     () =>
       needsOpenClawStateDatabaseSchemaRepair(pathname)
