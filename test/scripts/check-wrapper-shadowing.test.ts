@@ -43,13 +43,62 @@ describe("wrapper shadowing guard", () => {
     expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.js", wrapper: "src/outer.ts" }]);
   });
 
-  it("passes for a pure re-export", async () => {
+  it.each([
+    ["pure re-export", 'export { runTask } from "./inner.js";'],
+    [
+      "untyped identity alias",
+      'import { runTask as runTaskInner } from "./inner.js"; export const runTask = runTaskInner;',
+    ],
+    [
+      "typed identity alias",
+      'import { runTask as runTaskInner } from "./inner.js"; export const runTask: () => string = runTaskInner;',
+    ],
+    [
+      "namespace identity alias",
+      'import * as runtime from "./inner.js"; export const runTask = runtime.runTask;',
+    ],
+  ])("passes for a %s", async (_name, content) => {
     const result = await runFixture({
       "src/inner.ts": "export function runTask() { return 'inner'; }\n",
-      "src/outer.ts": 'export { runTask } from "./inner.js";\n',
+      "src/outer.ts": content,
     });
 
     expect(result).toEqual([]);
+  });
+
+  it.each([
+    ["typed arrow wrapper", "export const runTask: () => string = () => runTaskInner();"],
+    ["call initializer", "export const runTask = runTaskInner();"],
+    ["destructured binding", "export const { runTask } = runTaskInner;"],
+  ])("still reports a %s as a value definition", async (_name, declaration) => {
+    const result = await runFixture({
+      "src/inner.ts":
+        "export const runTask = Object.assign(() => 'inner', { runTask: () => 'nested' });",
+      "src/outer.ts": `import { runTask as runTaskInner } from "./inner.js";\n${declaration}`,
+    });
+
+    expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.ts", wrapper: "src/outer.ts" }]);
+  });
+
+  it("resolves a real wrapper through a typed identity re-export", async () => {
+    const result = await runFixture({
+      "src/inner.ts": "export function runTask() { return 'inner'; }\n",
+      "src/facade.ts": [
+        'import { runTask as runTaskInner } from "./inner.js";',
+        "export const runTask: () => string = runTaskInner;",
+      ].join("\n"),
+      "src/outer.ts": [
+        'import { runTask as runTaskFacade } from "./facade.js";',
+        "export function runTask() {",
+        "  prepareTask();",
+        "  return runTaskFacade();",
+        "}",
+      ].join("\n"),
+    });
+
+    expect(result).toEqual([
+      { name: "runTask", wrapped: "src/inner.ts", wrapper: "src/outer.ts", via: "src/facade.ts" },
+    ]);
   });
 
   it("rejects debt-baseline updates with the wrapper trailer", () => {
