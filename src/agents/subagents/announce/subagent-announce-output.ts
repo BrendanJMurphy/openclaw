@@ -1,16 +1,31 @@
+import path from "node:path";
+import { formatCompactTokenCount } from "@openclaw/normalization-core";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 /**
  * Subagent completion output capture.
  *
  * Reads child session output, detects waiting states, and formats completion findings for announcements.
  */
-import { formatCompactTokenCount } from "@openclaw/normalization-core";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import { readSessionArchiveContentSync } from "../../../config/sessions/archive-compression.js";
+import {
+  findTranscriptEvent,
+  type SessionTranscriptRuntimeTarget,
+} from "../../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteTranscriptArchiveDirectory,
+  resolveSqliteTranscriptReadScope,
+} from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { listSessionTranscriptArchivesReadOnly } from "../../../config/sessions/session-history.js";
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
+import {
+  readSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../../sessions/transcript-events.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
@@ -20,6 +35,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "../registry/subagent-lifecycle-events.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
@@ -46,6 +62,11 @@ const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
   "function_call",
 ]);
 type SubagentAnnounceOutputDeps = {
+  findTranscriptEvent: typeof findTranscriptEvent;
+  listSessionTranscriptArchivesReadOnly: typeof listSessionTranscriptArchivesReadOnly;
+  readSessionArchiveContentSync: typeof readSessionArchiveContentSync;
+  resolveSqliteTranscriptArchiveDirectory: typeof resolveSqliteTranscriptArchiveDirectory;
+  resolveSqliteTranscriptReadScope: typeof resolveSqliteTranscriptReadScope;
   callGateway: typeof callSubagentLifecycleGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   readSubagentSessionEntry: typeof readSubagentSessionEntry;
@@ -55,6 +76,11 @@ type SubagentAnnounceOutputDeps = {
 };
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
+  findTranscriptEvent,
+  listSessionTranscriptArchivesReadOnly,
+  readSessionArchiveContentSync,
+  resolveSqliteTranscriptArchiveDirectory,
+  resolveSqliteTranscriptReadScope,
   callGateway: callSubagentLifecycleGateway,
   getRuntimeConfig,
   readSubagentSessionEntry,
@@ -392,6 +418,109 @@ export async function captureSubagentCompletionReply(
   });
 }
 
+/** Read the final assistant message from the transcript identity owned by this run. */
+export async function readSubagentRunAnnounceResult(
+  child: Pick<SubagentRunRecord, "runId" | "childSessionKey" | "execution" | "completion">,
+): Promise<string | undefined> {
+  if (
+    child.completion?.terminalReply?.disposition !== "visible" ||
+    child.execution.outcome?.status !== "ok"
+  ) {
+    return resolveSubagentCompletionResultText(child);
+  }
+  const runId = child.runId;
+  const childSessionKey = child.childSessionKey;
+  const target = child.execution.transcriptTarget;
+  const targetIdentity = target ? { ...target } : undefined;
+  const agentId =
+    target?.agentId ?? subagentAnnounceOutputDeps.resolveAgentIdFromSessionKey(childSessionKey);
+  const storePath =
+    target?.storePath ??
+    subagentAnnounceOutputDeps.resolveSessionStorePathCore(
+      subagentAnnounceOutputDeps.getRuntimeConfig().session?.store,
+      { agentId },
+    );
+  const sessionKey = target?.sessionKey ?? childSessionKey;
+  const sessionId =
+    target?.sessionId ??
+    subagentAnnounceOutputDeps.readSubagentSessionEntry(storePath, sessionKey)?.sessionId;
+  const scope = { agentId, storePath, sessionKey };
+  const matchesRun = (event: unknown) =>
+    isRecord(event) &&
+    isRecord(event.message) &&
+    readSessionTranscriptRunId(event.message) === runId &&
+    resolveTerminalAssistantTranscriptRunId(event.message, runId) !== undefined;
+  const found = sessionId
+    ? await subagentAnnounceOutputDeps.findTranscriptEvent({ ...scope, sessionId }, matchesRun)
+    : undefined;
+  let event: unknown = found?.event;
+  if (!event) {
+    // Delete cleanup archives the transcript before requester settlement. Its
+    // registered session identity and stored run id still identify this answer.
+    const archives = subagentAnnounceOutputDeps
+      .listSessionTranscriptArchivesReadOnly({
+        ...scope,
+        sessionIds: [sessionId ?? sessionKey],
+      })
+      .filter((archive) =>
+        sessionId ? archive.sessionId === sessionId : archive.sessionKey === sessionKey,
+      )
+      .toReversed();
+    for (const archive of archives) {
+      const directory = subagentAnnounceOutputDeps.resolveSqliteTranscriptArchiveDirectory(
+        subagentAnnounceOutputDeps.resolveSqliteTranscriptReadScope({
+          ...scope,
+          sessionId: archive.sessionId,
+        }),
+      );
+      const events: unknown[] = subagentAnnounceOutputDeps
+        .readSessionArchiveContentSync(path.join(directory, archive.archiveName))
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((line) => JSON.parse(line));
+      const header = events[0];
+      if (!isRecord(header) || header.type !== "session" || header.id !== archive.sessionId) {
+        throw new Error(
+          "The completed child run's archive does not match its transcript identity.",
+        );
+      }
+      event = events.findLast(matchesRun);
+      if (event) {
+        break;
+      }
+    }
+  }
+  const currentTarget = child.execution.transcriptTarget;
+  if (
+    child.runId !== runId ||
+    child.childSessionKey !== childSessionKey ||
+    currentTarget !== target ||
+    currentTarget?.sessionId !== targetIdentity?.sessionId ||
+    currentTarget?.agentId !== targetIdentity?.agentId ||
+    currentTarget?.storePath !== targetIdentity?.storePath
+  ) {
+    throw new Error("The completed child run's transcript identity changed during announcement.");
+  }
+  const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
+  if (!answer) {
+    throw new Error("The completed child run's final answer is unavailable in its transcript.");
+  }
+  return answer;
+}
+
+/** Prepare complete result text without changing the bounded lifecycle evidence. */
+export async function readChildCompletionFindings(
+  children: SubagentRunRecord[],
+): Promise<string | undefined> {
+  const results = await Promise.all(
+    children.map(async (child) => ({
+      ...child,
+      announceResult: await readSubagentRunAnnounceResult(child),
+    })),
+  );
+  return buildChildCompletionFindings(results);
+}
+
 function describeSubagentOutcome(child: ChildCompletionRow): string {
   const outcome = child.execution.outcome;
   if (child.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
@@ -429,6 +558,7 @@ function truncateChildCompletionField(value: string): string {
 type ChildCompletionExecution = { endedAt?: number; outcome?: SubagentRunOutcome };
 
 type ChildCompletionRow = {
+  announceResult?: string;
   childSessionKey: string;
   task: string;
   taskName?: string;
@@ -472,7 +602,7 @@ export function buildChildCompletionFindings(
 
   const sections: string[] = [];
   for (const [index, child] of sorted.entries()) {
-    const resultText = resolveSubagentCompletionResultText(child);
+    const resultText = child.announceResult ?? resolveSubagentCompletionResultText(child);
     const outcome = describeSubagentOutcome(child);
     if (
       child.execution.outcome?.status === "ok" &&

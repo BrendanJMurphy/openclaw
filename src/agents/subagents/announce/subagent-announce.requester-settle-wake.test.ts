@@ -11,6 +11,7 @@ import {
   sessionStore,
   setSessionStore,
   registryRuntimeMock,
+  findTranscriptEventMock,
   listedRequesterRuns,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
@@ -547,6 +548,27 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           }),
         ),
       ]);
+
+      if (terminalReply.disposition === "visible") {
+        for (const child of listedRequesterRuns()) {
+          sessionStore[child.childSessionKey] = { sessionId: `session-${child.runId}` };
+        }
+        findTranscriptEventMock.mockImplementation(async (scope, match) => {
+          const child = listedRequesterRuns().find(
+            (entry) => `session-${entry.runId}` === scope.sessionId,
+          );
+          const event = {
+            type: "message",
+            message: {
+              role: "assistant",
+              stopReason: "stop",
+              content: [{ type: "text", text: terminalReply.text }],
+              __openclaw: { runId: child?.runId },
+            },
+          };
+          return match(event) ? { event } : undefined;
+        });
+      }
 
       expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ requesterOrigin }))).toBe(
         true,

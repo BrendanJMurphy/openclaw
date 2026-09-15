@@ -46,7 +46,7 @@ import {
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
-  buildChildCompletionFindings,
+  readChildCompletionFindings,
   dedupeLatestChildCompletionRows,
   filterCurrentDirectChildCompletionRows,
 } from "./subagent-announce-output.js";
@@ -461,7 +461,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     finalizeRequesterAttachment(batchRunIds, selectedState);
     return false;
   }
-  const findings = buildChildCompletionFindings(completionRows);
+  const findings = await readChildCompletionFindings(completionRows);
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
   // The scheduling row need not be the rerouted child. Keep every current
@@ -592,10 +592,17 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     };
     const isBatchCurrent = () => {
       const currentRuns = listSubagentRunsForRequester(requesterSessionKey, { requesterAgentId });
-      return settledBatch.every(
-        (entry) =>
-          currentRuns.includes(entry) &&
-          entry.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
+      return (
+        filterCurrentDirectChildCompletionRows(settledBatch, {
+          requesterSessionKey,
+          requesterAgentId,
+          getLatestSubagentRunByChildSessionKey,
+        }).length === settledBatch.length &&
+        settledBatch.every(
+          (entry) =>
+            currentRuns.includes(entry) &&
+            entry.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
+        )
       );
     };
     const isSourceSessionEffectsAllowed = () =>

@@ -60,7 +60,8 @@ import {
 } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
-  buildChildCompletionFindings,
+  readChildCompletionFindings,
+  readSubagentRunAnnounceResult,
   buildCompactAnnounceStatsLine,
   dedupeLatestChildCompletionRows,
   filterCurrentDirectChildCompletionRows,
@@ -299,6 +300,7 @@ async function runSubagentAnnounceFlowBound(
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
     let childCompletionFindings: string | undefined;
+    let childCompletionRows: Parameters<typeof readChildCompletionFindings>[0] | undefined;
     let hasPrivateChildCompletion = false;
     let subagentRegistryRuntime:
       | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
@@ -335,11 +337,15 @@ async function runSubagentAnnounceFlowBound(
           hasPrivateChildCompletion = completionRows.some(
             (entry) => entry.completionTarget === "parent",
           );
-          childCompletionFindings = buildChildCompletionFindings(completionRows);
+          childCompletionRows = completionRows;
         }
       }
     } catch {
       // Best-effort only.
+    }
+
+    if (childCompletionRows) {
+      childCompletionFindings = await readChildCompletionFindings(childCompletionRows);
     }
 
     const announceId = buildAnnounceIdFromChildRun({
@@ -388,6 +394,11 @@ async function runSubagentAnnounceFlowBound(
       : undefined;
 
     if (!childCompletionFindings || hasPrivateChildCompletion) {
+      const childRun = getLatestSubagentRunByChildSessionKey(params.childSessionKey);
+      if (childSessionEffectsAllowed() && childRun?.runId === params.childRunId) {
+        reply = await readSubagentRunAnnounceResult(childRun);
+      }
+
       if (params.terminalReply?.disposition === "silent") {
         if (!hasVisibleFallback && (isAnnounceSkip(fallbackReply) || !expectsCompletionMessage)) {
           return "delivered";
@@ -662,6 +673,7 @@ async function runSubagentAnnounceFlowBound(
       );
     }
   } catch (err) {
+    shouldDeleteChildSession = false;
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {

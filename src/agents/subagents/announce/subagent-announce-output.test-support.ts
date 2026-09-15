@@ -8,7 +8,14 @@ type OutputDeps = Pick<
   | "readSessionMessagesAsync"
   | "resolveAgentIdFromSessionKey"
   | "resolveSessionStorePathCore"
-> & { callGateway: OutputRuntime["callSubagentLifecycleGateway"] };
+> & {
+  callGateway: OutputRuntime["callSubagentLifecycleGateway"];
+  findTranscriptEvent: typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent;
+  listSessionTranscriptArchivesReadOnly: typeof import("../../../config/sessions/session-history.js").listSessionTranscriptArchivesReadOnly;
+  readSessionArchiveContentSync: typeof import("../../../config/sessions/archive-compression.js").readSessionArchiveContentSync;
+  resolveSqliteTranscriptArchiveDirectory: typeof import("../../../config/sessions/session-accessor.sqlite-scope.js").resolveSqliteTranscriptArchiveDirectory;
+  resolveSqliteTranscriptReadScope: typeof import("../../../config/sessions/session-accessor.sqlite-scope.js").resolveSqliteTranscriptReadScope;
+};
 
 type Testing = {
   setDepsForTest(overrides?: Partial<OutputDeps>): void;
