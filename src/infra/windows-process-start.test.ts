@@ -11,7 +11,6 @@ const nativeKoffiMock = vi.hoisted(() => vi.fn());
 vi.mock("node:module", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:module")>();
   return {
-    ...original,
     createRequire: (url: string | URL) => {
       const require = original.createRequire(url);
       return (id: string) => (id === "koffi" ? nativeKoffiMock() : require(id));
@@ -246,7 +245,7 @@ describe("native Windows process start identity", () => {
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([0, -1, 1.5, 0x1_0000_0000, Number.MAX_SAFE_INTEGER, NaN, Infinity])(
+  it.each([0, -1, 1.5, 0x1_0000_0000, Number.MAX_SAFE_INTEGER, Number.NaN, Infinity])(
     "rejects PID %s before native DWORD conversion or a shell query",
     async (pid) => {
       const { readWindowsProcessStartTimeSync: read } = await import("./windows-process-start.js");
