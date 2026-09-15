@@ -34,6 +34,7 @@ import {
 import { renderPluginStateStatus } from "./plugin-card.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
 import { matchesPluginQuery } from "./plugin-state-presentation.ts";
+import type { PluginSettingsEditor } from "./settings-editor.ts";
 import { renderPluginLifecycle } from "./settings-lifecycle.ts";
 import { pluginEntryValue } from "./settings-model.ts";
 import type { PluginToolPreview } from "./tool-preview.ts";
@@ -83,6 +84,7 @@ type InventoryProps = SharedProps & {
 };
 
 export type DetailProps = SharedProps & {
+  renderCredential?: PluginSettingsEditor["renderCredential"];
   skillsSection?: TemplateResult;
   tools?: PluginToolPreview[];
   onOpenTool?: (name: string) => void;
@@ -462,6 +464,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         ${notices}
         <openclaw-plugin-settings-editor
           .model=${props}
+          .renderCredential=${props.renderCredential}
           .renderPermissions=${(query: string) => renderPermissions(props, query)}
         ></openclaw-plugin-settings-editor>
       `,
