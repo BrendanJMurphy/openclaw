@@ -6,6 +6,8 @@ const LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX =
 const LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX_SQL =
   "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)";
 
+const cleanSchemaVersions = new WeakMap<DatabaseSync, number>();
+
 function normalizeSqliteCatalogSql(sql: string): string {
   return sql
     .replace(/\s+/gu, " ")
@@ -31,7 +33,15 @@ export function withSqliteWritableSchema<T>(database: DatabaseSync, operation: (
 
 /** Detect only the known v15 review index left behind after its column was retired. */
 export function hasDanglingSkillWorkshopCollectionReviewIndex(database: DatabaseSync): boolean {
-  return withSqliteWritableSchema(database, () => {
+  // Toggling schema/defensive flags expires every prepared statement. Recheck only after DDL;
+  // transaction-local schema cookies can be reused after rollback, so never cache those facts.
+  const schemaVersion = database.isTransaction
+    ? undefined
+    : database.prepare("PRAGMA main.schema_version").get()?.schema_version; // sqlite-allow-raw -- Read SQLite's physical schema cookie without parsing malformed schema.
+  if (typeof schemaVersion === "number" && cleanSchemaVersions.get(database) === schemaVersion) {
+    return false;
+  }
+  const dangling = withSqliteWritableSchema(database, () => {
     const rawIndex = database // sqlite-allow-raw -- Inspect the exact malformed catalog row before ordinary schema parsing.
       .prepare(
         "SELECT tbl_name, rootpage, sql FROM sqlite_schema WHERE type = 'index' AND name = ?",
@@ -59,6 +69,10 @@ export function hasDanglingSkillWorkshopCollectionReviewIndex(database: Database
       !columns.some((column) => column.name === "workspace_dir")
     );
   });
+  if (!dangling && typeof schemaVersion === "number") {
+    cleanSchemaVersions.set(database, schemaVersion);
+  }
+  return dangling;
 }
 
 /** Keep a read-only connection tolerant of the exact malformed legacy index. */
