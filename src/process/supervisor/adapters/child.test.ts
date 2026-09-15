@@ -7,10 +7,12 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { closeOwnedStdioProcess } from "../../owned-stdio.js";
 import {
+  createChildAdapterHarness,
   createStubChild,
   createWindowsNpmShim,
   firstMockArg,
   firstSpawnWithFallbackParams,
+  setPlatform,
 } from "./child.test-support.js";
 import {
   expectRealExitWinsOverSigkillFallback,
@@ -63,23 +65,8 @@ let createChildAdapter: typeof import("./child.js").createChildAdapter;
 let getWindowsInstallRoots: typeof import("../../../infra/windows-install-roots.js").getWindowsInstallRoots;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function createAdapterHarness(params?: {
-  pid?: number;
-  argv?: string[];
-  env?: NodeJS.ProcessEnv;
-  stdinMode?: Parameters<typeof createChildAdapter>[0]["stdinMode"];
-}) {
-  const stub = createStubChild(params?.pid);
-  spawnWithFallbackMock.mockResolvedValue({
-    child: stub.child,
-    usedFallback: false,
-  });
-  const adapter = await createChildAdapter({
-    argv: params?.argv ?? ["node", "-e", "setTimeout(() => {}, 1000)"],
-    env: params?.env,
-    stdinMode: params?.stdinMode ?? "pipe-open",
-  });
-  return { ...stub, adapter };
+function createAdapterHarness(params?: Parameters<typeof createChildAdapterHarness>[2]) {
+  return createChildAdapterHarness(createChildAdapter, spawnWithFallbackMock, params);
 }
 
 function expectedTrustedCmdExe(): string {
@@ -89,13 +76,6 @@ function expectedTrustedCmdExe(): string {
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
-  const setPlatform = (platform: NodeJS.Platform) => {
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      value: platform,
-    });
-  };
 
   beforeEach(async () => {
     vi.resetModules();
