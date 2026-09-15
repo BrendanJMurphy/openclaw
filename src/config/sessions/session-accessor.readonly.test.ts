@@ -123,7 +123,7 @@ describe("session accessor readonly listing", () => {
       );
       const scope = { agentId: "ops", env, storePath, sessionKey };
       const filesBefore = fs
-        .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true })
+        .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
         .toSorted((left, right) => left.localeCompare(right));
       const message = (event: unknown) => isRecord(event) && event.type === "message";
 
@@ -140,7 +140,7 @@ describe("session accessor readonly listing", () => {
       ).toThrow("Archived transcript header does not match its registered session");
       expect(
         fs
-          .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true })
+          .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
           .toSorted((left, right) => left.localeCompare(right)),
       ).toEqual(filesBefore);
       expect(
