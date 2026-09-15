@@ -1,9 +1,12 @@
+import { constants as bufferConstants } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import zlib from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -73,15 +76,29 @@ afterEach(() => {
 describe("session accessor readonly listing", () => {
   it.each([false, true])(
     "reads committed archive blobs before file publication (compressed=%s)",
-    (compressed) => {
+    async (compressed) => {
       const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-archive-blob-read-") };
       const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
       const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
       const sessionKey = "agent:ops:completed";
-      const answer = { type: "message", id: "latest", text: `${"<result>".repeat(900)}tail` };
+      const message = (id: string, content = id, runId = "completed-run") => ({
+        type: "message",
+        id,
+        message: { role: "assistant", content, __openclaw: { runId } },
+      });
+      const answer = message("latest", `${"<result>".repeat(900)}tail`);
       const archives = [
-        { sessionId: "old", sessionKey, events: [{ type: "message", id: "old" }] },
-        { sessionId: "new", sessionKey, events: [{ type: "message", id: "earlier" }, answer] },
+        { sessionId: "old", sessionKey, events: [message("old")] },
+        {
+          sessionId: "new",
+          sessionKey,
+          events: [
+            message("earlier"),
+            answer,
+            message("other-run", "unrelated", "other-run"),
+            message("silent", "NO_REPLY"),
+          ],
+        },
         { sessionId: "foreign", sessionKey: "agent:main:other", events: [answer] },
         { sessionId: "invalid", sessionKey: "agent:ops:invalid", events: [answer] },
       ];
@@ -125,19 +142,29 @@ describe("session accessor readonly listing", () => {
       const filesBefore = fs
         .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
         .toSorted((left, right) => left.localeCompare(right));
-      const message = (event: unknown) => isRecord(event) && event.type === "message";
 
-      expect(findSessionTranscriptArchiveEventReadOnly(scope, message)).toEqual({ event: answer });
+      expect(await findSessionTranscriptArchiveEventReadOnly(scope, "completed-run")).toEqual({
+        event: answer,
+      });
       expect(
-        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "old" }, message),
-      ).toEqual({ event: { type: "message", id: "old" } });
+        await findSessionTranscriptArchiveEventReadOnly(
+          { ...scope, sessionId: "old" },
+          "completed-run",
+        ),
+      ).toEqual({ event: message("old") });
       expect(
-        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "foreign" }, message),
+        await findSessionTranscriptArchiveEventReadOnly(
+          { ...scope, sessionId: "foreign" },
+          "completed-run",
+        ),
       ).toBeUndefined();
-      expect(findSessionTranscriptArchiveEventReadOnly(scope, () => false)).toBeUndefined();
-      expect(() =>
-        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "invalid" }, message),
-      ).toThrow("Archived transcript header does not match its registered session");
+      expect(await findSessionTranscriptArchiveEventReadOnly(scope, "missing-run")).toBeUndefined();
+      await expect(
+        findSessionTranscriptArchiveEventReadOnly(
+          { ...scope, sessionId: "invalid" },
+          "completed-run",
+        ),
+      ).rejects.toThrow("Archived transcript header does not match its registered session");
       expect(
         fs
           .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
@@ -154,7 +181,7 @@ describe("session accessor readonly listing", () => {
 
       const changedContent = [
         { type: "session", id: "new" },
-        { ...answer, text: "changed but valid transcript content" },
+        message("latest", "changed but valid transcript content"),
       ]
         .map((event) => JSON.stringify(event))
         .join("\n");
@@ -173,13 +200,91 @@ describe("session accessor readonly listing", () => {
         },
         { agentId: "main", env, path: storePath },
       );
-      const matchCorrupt = vi.fn(message);
-      expect(() =>
-        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "new" }, matchCorrupt),
-      ).toThrow("Archived transcript bytes do not match their registered hash");
-      expect(matchCorrupt).not.toHaveBeenCalled();
+      await expect(
+        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "new" }, "completed-run"),
+      ).rejects.toThrow("Archived transcript bytes do not match their registered hash");
     },
   );
+
+  it("reads a short final answer beyond the runtime string limit while the caller stays responsive", async () => {
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-large-archive-read-") };
+    const storePath = path.join(env.OPENCLAW_STATE_DIR, "archive.sqlite");
+    const sessionId = "large-archive";
+    const sessionKey = "agent:main:completed";
+    const answer = {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "Complete final answer.",
+        __openclaw: { runId: "completed-run" },
+      },
+    };
+    const historyLine =
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "x".repeat(64 * 1024) },
+      }) + "\n";
+    // The September 2026 failure was the runtime's single-string limit, not an archive byte limit.
+    const historyRows = Math.ceil((bufferConstants.MAX_STRING_LENGTH + 1) / historyLine.length);
+    const chunks: Buffer[] = [];
+    await pipeline(
+      Readable.from(
+        (function* () {
+          yield JSON.stringify({ type: "session", id: sessionId }) + "\n";
+          for (let index = 0; index < historyRows; index += 1) {
+            yield historyLine;
+          }
+          yield JSON.stringify(answer) + "\n";
+        })(),
+      ),
+      zlib.createZstdCompress(),
+      async (source) => {
+        for await (const chunk of source) {
+          chunks.push(Buffer.from(chunk));
+        }
+      },
+    );
+    const bytes = Buffer.concat(chunks);
+    const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
+    runOpenClawAgentWriteTransaction(
+      () => {
+        executeSqliteQuerySync(
+          database.db,
+          getSessionKysely(database.db)
+            .insertInto("session_transcript_archives")
+            .values({
+              session_id: sessionId,
+              session_key: sessionKey,
+              generation: "generation",
+              reason: "deleted",
+              encoding: "zstd",
+              archive_blob: bytes,
+              archive_sha256: createHash("sha256").update(bytes).digest("hex"),
+              archive_name: "large.jsonl.zst",
+              created_at: 1,
+              published_at: null,
+            }),
+        );
+      },
+      { agentId: "main", env, path: storePath },
+    );
+    let heartbeats = 0;
+    const heartbeat = setInterval(() => {
+      heartbeats += 1;
+    }, 10);
+    try {
+      await expect(
+        findSessionTranscriptArchiveEventReadOnly(
+          { agentId: "main", env, storePath, sessionId, sessionKey },
+          "completed-run",
+        ),
+      ).resolves.toEqual({ event: answer });
+      expect(heartbeats).toBeGreaterThan(0);
+      expect(fs.existsSync(path.join(env.OPENCLAW_STATE_DIR, "large.jsonl.zst"))).toBe(false);
+    } finally {
+      clearInterval(heartbeat);
+    }
+  }, 30_000);
 
   it("resolves a registered exact store once per batch and observes its next owner", () => {
     const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-target-") };

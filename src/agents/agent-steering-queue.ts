@@ -1,12 +1,12 @@
 /** Leases and formats completed subagent results for injection into requester turns. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForPromptLiteral, wrapPromptDataBlock } from "./sanitize-for-prompt.js";
+import type { PreparedAnnounceResult } from "./subagents/announce/subagent-announce-result.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
   SubagentRunRecord,
 } from "./subagents/registry/subagent-registry.types.js";
-import { selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 // Steering queue utilities for delivering completed subagent results back into
 // the requester session. Items are leased before injection to avoid duplicate
@@ -28,10 +28,16 @@ type AgentSteeringQueueItem = {
   payload: PendingFinalDeliveryPayload;
 };
 
+type PreparedSteeringItem = AgentSteeringQueueItem & {
+  result: PreparedAnnounceResult;
+  isCurrent: () => boolean;
+};
+
 /** A batch of leased subagent completions plus the prompt to inject upstream. */
 type LeasedAgentSteeringBatch = {
   runIds: string[];
   prompt: string;
+  isCurrent: () => boolean;
 };
 
 function isStaleLease(delivery: SubagentCompletionDeliveryState, now: number): boolean {
@@ -41,13 +47,6 @@ function isStaleLease(delivery: SubagentCompletionDeliveryState, now: number): b
     delivery.status === "in_progress" &&
     typeof delivery.steeringLeasedAt === "number" &&
     now - delivery.steeringLeasedAt > STALE_STEERING_LEASE_MS
-  );
-}
-
-function selectResultText(entry: SubagentRunRecord): string | undefined {
-  return selectDeliverableSessionsReply(
-    entry.completion?.resultText,
-    entry.completion?.fallbackResultText,
   );
 }
 
@@ -120,14 +119,13 @@ function listPendingAgentSteeringItemsFromSubagentRuns(params: {
 }
 
 /** Format a pending completion once using its final deterministic prompt position. */
-function buildAgentSteeringPromptSection(item: AgentSteeringQueueItem, index: number): string {
+function buildAgentSteeringPromptSection(item: PreparedSteeringItem, index: number): string {
   const { payload } = item;
   const title =
     promptLiteral(payload.label ?? "") ||
     promptLiteral(payload.task) ||
     promptLiteral(payload.childSessionKey) ||
     `subagent ${index + 1}`;
-  const resultText = selectResultText(item.entry);
   return [
     `${index + 1}. ${title}`,
     `status: ${promptLiteral(describeOutcome(payload))}`,
@@ -135,23 +133,36 @@ function buildAgentSteeringPromptSection(item: AgentSteeringQueueItem, index: nu
     `childRunId: ${promptLiteral(payload.childRunId)}`,
     wrapPromptDataBlock({
       label: "Subagent result",
-      text: resultText ?? "No completion text was captured.",
+      text: item.result.text ?? "No completion text was captured.",
     }),
   ].join("\n");
 }
 
-function selectPromptBoundedItems(
+async function selectPromptBoundedItems(
   items: readonly AgentSteeringQueueItem[],
-): { items: AgentSteeringQueueItem[]; prompt: string } | undefined {
-  const selected: AgentSteeringQueueItem[] = [];
+  readResult: (entry: SubagentRunRecord) => Promise<PreparedAnnounceResult>,
+): Promise<{ items: PreparedSteeringItem[]; prompt: string } | undefined> {
+  const selected: PreparedSteeringItem[] = [];
   const sections: string[] = [];
   let promptLength = MERGED_AGENT_STEERING_PROMPT_HEADER.length;
   for (const item of items) {
-    const section = buildAgentSteeringPromptSection(item, selected.length);
+    const generation = item.entry.generation;
+    const delivery = item.entry.delivery;
+    const result = await readResult(item.entry);
+    const prepared: PreparedSteeringItem = {
+      ...item,
+      result,
+      isCurrent: () =>
+        item.entry.generation === generation &&
+        item.entry.delivery === delivery &&
+        delivery?.payload === item.payload &&
+        result.isCurrent(),
+    };
+    const section = buildAgentSteeringPromptSection(prepared, selected.length);
     // Account for the exact separator so selection preserves the rendered character cap.
     const nextPromptLength = promptLength + "\n\n".length + section.length;
     if (nextPromptLength <= MAX_MERGED_STEERING_CHARS) {
-      selected.push(item);
+      selected.push(prepared);
       sections.push(section);
       promptLength = nextPromptLength;
       continue;
@@ -159,7 +170,7 @@ function selectPromptBoundedItems(
     if (selected.length === 0) {
       // Deliver an oversized first result whole so the soft batch cap cannot
       // truncate it or permanently block the queue.
-      selected.push(item);
+      selected.push(prepared);
       sections.push(section);
     }
     break;
@@ -174,24 +185,37 @@ function selectPromptBoundedItems(
 }
 
 /** Leases pending steering items and returns the prompt to prepend to the requester turn. */
-export function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
+export async function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   requesterSessionKey: string;
   leaseId: string;
   now?: number;
-}): LeasedAgentSteeringBatch | undefined {
+  readResult: (entry: SubagentRunRecord) => Promise<PreparedAnnounceResult>;
+}): Promise<LeasedAgentSteeringBatch | undefined> {
   const now = params.now ?? Date.now();
-  const selection = selectPromptBoundedItems(
+  const selection = await selectPromptBoundedItems(
     listPendingAgentSteeringItemsFromSubagentRuns({
       runs: params.runs,
       requesterSessionKey: params.requesterSessionKey,
       now,
     }),
+    params.readResult,
   );
   if (!selection) {
     return undefined;
   }
   const { items, prompt } = selection;
+  const pending = new Set(
+    listPendingAgentSteeringItemsFromSubagentRuns({ ...params, now }).map((item) => item.entry),
+  );
+  if (
+    items.some(
+      (item) =>
+        params.runs.get(item.runId) !== item.entry || !pending.has(item.entry) || !item.isCurrent(),
+    )
+  ) {
+    throw new Error("A queued child result changed while preparing the requester prompt.");
+  }
   for (const item of items) {
     const delivery = item.entry.delivery;
     if (!delivery) {
@@ -207,6 +231,14 @@ export function leasePendingAgentSteeringItemsFromSubagentRuns(params: {
   return {
     runIds: items.map((item) => item.runId),
     prompt,
+    isCurrent: () =>
+      items.every(
+        (item) =>
+          params.runs.get(item.runId) === item.entry &&
+          item.isCurrent() &&
+          item.entry.delivery?.status === "in_progress" &&
+          item.entry.delivery.steeringLeaseId === params.leaseId,
+      ),
   };
 }
 

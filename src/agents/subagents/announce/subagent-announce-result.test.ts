@@ -7,6 +7,7 @@ import {
   readChildCompletionFindings,
   readSubagentRunAnnounceResult,
 } from "./subagent-announce-output.test-support.js";
+import { isVisibleSubagentResultEventForRun } from "./subagent-announce-result.js";
 
 describe("exact-run announcement results", () => {
   type FindTranscriptEvent =
@@ -50,14 +51,16 @@ describe("exact-run announcement results", () => {
       resolveSessionStorePathCore: () => "/tmp/completed-session-store",
       readSubagentSessionEntry: () =>
         deletedSession ? undefined : { sessionId: "completed-session", updatedAt: 1 },
-      findSessionTranscriptArchiveEventReadOnly: (scope, match) => {
+      findSessionTranscriptArchiveEventReadOnly: async (scope, runId) => {
         expect(scope).toEqual({
           agentId: "main",
           storePath: "/tmp/completed-session-store",
           sessionId: deletedSession ? undefined : "completed-session",
           sessionKey: "agent:main:subagent:completed",
         });
-        const event = archiveEvents?.findLast(match);
+        const event = archiveEvents?.findLast((event) =>
+          isVisibleSubagentResultEventForRun(event, runId),
+        );
         return event === undefined ? undefined : { event };
       },
     });

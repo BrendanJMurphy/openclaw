@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   promoteRequesterFinalAttachment,
   registerRequesterFinalAttachment,
@@ -188,44 +189,89 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     // A overlaps B and B overlaps C, but A never overlaps C. When C settles
     // last, A's results must still ride the wake and the idempotency key must
     // cover the full component (any last-settler computes the same batch).
-    const resultPrefix = "<result>".repeat(300);
+    const resultPrefix = "<result>".repeat(700);
     const childA = makeSettledChild({
       runId: "run-a",
       createdAt: 1_000,
       startedAt: 1_000,
       endedAt: 2_000,
-      completion: { required: true, resultText: `${resultPrefix}alpha findings` },
+      outcome: { status: "ok" },
     });
     const childB = makeSettledChild({
       runId: "run-b",
       createdAt: 1_500,
       startedAt: 1_500,
       endedAt: 3_000,
-      completion: { required: true, resultText: `${resultPrefix}bravo findings` },
+      outcome: { status: "ok" },
     });
     const childC = makeSettledChild({
       runId: "run-c",
       createdAt: 2_500,
       startedAt: 2_500,
       endedAt: 4_000,
-      completion: { required: true, resultText: `${resultPrefix}charlie findings` },
+      outcome: { status: "ok" },
     });
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([childA, childB, childC]);
+    const children = [childA, childB, childC];
+    const transcripts = new Map<string, unknown[]>();
+    const findings = ["alpha findings", "bravo findings", "charlie findings"];
+    for (const [index, child] of children.entries()) {
+      const text = `${resultPrefix}${findings[index]}`;
+      const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: text });
+      expect(terminalReply.disposition).toBe("visible");
+      if (terminalReply.disposition !== "visible") {
+        throw new Error("expected visible terminal evidence");
+      }
+      child.completion = { required: true, terminalReply, resultText: terminalReply.text };
+      expect(terminalReply.text).toHaveLength(4_096);
+      const sessionId = `session-${child.runId}`;
+      sessionStore[child.childSessionKey] = { sessionId };
+      const assistant = (runId: string, text: string, stopReason = "stop") => ({
+        type: "message",
+        message: {
+          role: "assistant",
+          stopReason,
+          content: [{ type: "text", text }],
+          __openclaw: { runId },
+        },
+      });
+      transcripts.set(sessionId, [
+        assistant("previous-run", "stale previous result"),
+        assistant(child.runId, "earlier commentary"),
+        assistant(child.runId, text),
+        assistant("replacement-run", "unrelated later result"),
+        assistant(child.runId, "unfinished follow-up", "toolUse"),
+      ]);
+    }
+    findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
+      const event = transcripts.get(sessionId)?.findLast(match);
+      return event === undefined ? undefined : { event };
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(
       wakeParams({ settledEntry: childC }),
     );
 
     expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledOnce();
     const call = deliveredCallArg();
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
     const message = String(call.triggerMessage);
-    for (const result of ["alpha findings", "bravo findings", "charlie findings"]) {
-      expect(message).toContain(`${"&lt;result&gt;".repeat(300)}${result}`);
+    for (const result of findings) {
+      expect(message).toContain(`${"&lt;result&gt;".repeat(700)}${result}`);
     }
+    expect(message).not.toContain("stale previous result");
+    expect(message).not.toContain("earlier commentary");
+    expect(message).not.toContain("unrelated later result");
+    expect(message).not.toContain("unfinished follow-up");
     expect(message.indexOf("alpha findings")).toBeLessThan(message.indexOf("bravo findings"));
     expect(message.indexOf("bravo findings")).toBeLessThan(message.indexOf("charlie findings"));
     expect(call.steerMessage).toBe(message);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-a", "run-b", "run-c"],
+      undefined,
+      { delivered: true, path: "direct" },
+    );
   });
 
   it("keeps capacity-queued siblings in the same spawned wave", async () => {
@@ -249,6 +295,69 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliveredCallArg().directIdempotencyKey).toBe(
       requesterSettleKey("run-first,run-queued"),
     );
+  });
+
+  it("delivers the complete final source reply after a same-run silent terminal", async () => {
+    const text = `${"<source-reply>".repeat(400)}required source reply tail`;
+    const child = makeSettledChild({
+      runId: "run-b",
+      outcome: { status: "ok" },
+      completion: {
+        required: true,
+        terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text }),
+      },
+      requesterSettleWake: {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+      },
+    });
+    sessionStore[child.childSessionKey] = { sessionId: "source-reply-session" };
+    const assistant = (runId: string, text: string) => ({
+      type: "message",
+      message: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text }],
+        __openclaw: { runId },
+      },
+    });
+    const sourceReply = assistant(child.runId, text);
+    const events = [
+      assistant("previous-run", "stale source reply"),
+      {
+        ...sourceReply,
+        message: {
+          ...sourceReply.message,
+          openclawDeliveryMirror: { kind: "message-tool-source-reply", final: true },
+        },
+      },
+      assistant(child.runId, "NO_REPLY"),
+      assistant("replacement-run", "unrelated source reply"),
+    ];
+    findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
+      expect(sessionId).toBe("source-reply-session");
+      const event = events.findLast(match);
+      return event === undefined ? undefined : { event };
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
+
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    const call = deliveredCallArg();
+    const message = String(call.triggerMessage);
+    expect(message).toContain(`${"&lt;source-reply&gt;".repeat(400)}required source reply tail`);
+    expect(message).not.toContain("NO_REPLY");
+    expect(message).not.toContain("stale source reply");
+    expect(message).not.toContain("unrelated source reply");
+    expect(call.steerMessage).toBe(message);
+    expect(call.requireVisibleReply).toBe(true);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-b"], 1, {
+      delivered: true,
+      path: "direct",
+    });
   });
 
   it("ignores long-settled children from earlier non-overlapping spawns", async () => {

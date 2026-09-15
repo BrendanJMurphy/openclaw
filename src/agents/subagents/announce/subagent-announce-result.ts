@@ -1,6 +1,7 @@
 /** Exact-run final answer reads for subagent completion announcements. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
@@ -54,6 +55,24 @@ function captureAnnounceResultAuthority(child: AnnounceChild): () => boolean {
   };
 }
 
+export function isVisibleSubagentResultEventForRun(event: unknown, runId: string): boolean {
+  if (
+    !isRecord(event) ||
+    !isRecord(event.message) ||
+    readSessionTranscriptRunId(event.message) !== runId ||
+    resolveTerminalAssistantTranscriptRunId(event.message, runId) === undefined
+  ) {
+    return false;
+  }
+  const mirror = event.message.openclawDeliveryMirror;
+  if (isRecord(mirror) && mirror.kind === "message-tool-source-reply" && mirror.final !== true) {
+    return false;
+  }
+  // A final source reply remains visible when the run ends with NO_REPLY.
+  const text = extractStoredAssistantText(event.message);
+  return Boolean(text?.trim()) && !isSilentReplyText(text, SILENT_REPLY_TOKEN);
+}
+
 /** Read the final assistant message from the transcript identity owned by this run. */
 export async function readSubagentRunAnnounceResultUsing(
   child: AnnounceChild,
@@ -75,21 +94,15 @@ export async function readSubagentRunAnnounceResultUsing(
   const sessionId =
     target?.sessionId ?? deps.readSubagentSessionEntry(storePath, sessionKey)?.sessionId;
   const scope = { agentId, storePath, sessionKey };
-  const matchesRun = (event: unknown) =>
-    isRecord(event) &&
-    isRecord(event.message) &&
-    readSessionTranscriptRunId(event.message) === runId &&
-    resolveTerminalAssistantTranscriptRunId(event.message, runId) !== undefined;
+  const matchesRun = (event: unknown) => isVisibleSubagentResultEventForRun(event, runId);
   const found = sessionId
     ? await deps.findTranscriptEvent({ ...scope, sessionId }, matchesRun)
     : undefined;
   let event: unknown = found?.event;
   if (!event) {
     // Delete commits the canonical archive before its derived file is published.
-    event = deps.findSessionTranscriptArchiveEventReadOnly(
-      { ...scope, sessionId },
-      matchesRun,
-    )?.event;
+    event = (await deps.findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId }, runId))
+      ?.event;
   }
   if (!isCurrent()) {
     throw new Error("The completed child run's transcript identity changed during announcement.");
