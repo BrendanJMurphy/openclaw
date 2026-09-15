@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -9,7 +11,10 @@ import {
   makeTempDir,
   useAutoCleanupTempDirTracker,
 } from "../../../test/helpers/temp-dir.js";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  executeSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
@@ -22,6 +27,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { encodeSessionArchiveContent } from "./archive-compression.js";
 import {
   hasSessionEntriesByStatusReadOnly,
   listSessionEntriesCore,
@@ -39,7 +45,9 @@ import {
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
+import { findSessionTranscriptArchiveEventReadOnly } from "./session-history.js";
 import * as sqliteTargets from "./session-sqlite-target.js";
 
 const tempDirs: string[] = [];
@@ -63,6 +71,112 @@ afterEach(() => {
 });
 
 describe("session accessor readonly listing", () => {
+  it.each([false, true])(
+    "reads committed archive blobs before file publication (compressed=%s)",
+    (compressed) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-archive-blob-read-") };
+      const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
+      const database = openOpenClawAgentDatabase({ agentId: "main", env, path: storePath });
+      const sessionKey = "agent:ops:completed";
+      const answer = { type: "message", id: "latest", text: `${"<result>".repeat(900)}tail` };
+      const archives = [
+        { sessionId: "old", sessionKey, events: [{ type: "message", id: "old" }] },
+        { sessionId: "new", sessionKey, events: [{ type: "message", id: "earlier" }, answer] },
+        { sessionId: "foreign", sessionKey: "agent:main:other", events: [answer] },
+        { sessionId: "invalid", sessionKey: "agent:ops:invalid", events: [answer] },
+      ];
+      runOpenClawAgentWriteTransaction(
+        () => {
+          for (const [index, archive] of archives.entries()) {
+            const content = [
+              {
+                type: "session",
+                id: archive.sessionId === "invalid" ? "wrong" : archive.sessionId,
+              },
+              ...archive.events,
+            ]
+              .map((event) => JSON.stringify(event))
+              .join("\n");
+            const encoded = compressed
+              ? encodeSessionArchiveContent(content)
+              : { bytes: Buffer.from(content), suffix: "" };
+            executeSqliteQuerySync(
+              database.db,
+              getSessionKysely(database.db)
+                .insertInto("session_transcript_archives")
+                .values({
+                  session_id: archive.sessionId,
+                  session_key: archive.sessionKey,
+                  generation: "generation",
+                  reason: "deleted",
+                  encoding: encoded.suffix ? "zstd" : "identity",
+                  archive_blob: encoded.bytes,
+                  archive_sha256: createHash("sha256").update(encoded.bytes).digest("hex"),
+                  archive_name: `archive-${index}.jsonl${encoded.suffix}`,
+                  created_at: index,
+                  published_at: null,
+                }),
+            );
+          }
+        },
+        { agentId: "main", env, path: storePath },
+      );
+      const scope = { agentId: "ops", env, storePath, sessionKey };
+      const filesBefore = fs.readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true }).toSorted();
+      const message = (event: unknown) => isRecord(event) && event.type === "message";
+
+      expect(findSessionTranscriptArchiveEventReadOnly(scope, message)).toEqual({ event: answer });
+      expect(
+        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "old" }, message),
+      ).toEqual({ event: { type: "message", id: "old" } });
+      expect(
+        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "foreign" }, message),
+      ).toBeUndefined();
+      expect(findSessionTranscriptArchiveEventReadOnly(scope, () => false)).toBeUndefined();
+      expect(() =>
+        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "invalid" }, message),
+      ).toThrow("Archived transcript header does not match its registered session");
+      expect(fs.readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true }).toSorted()).toEqual(
+        filesBefore,
+      );
+      expect(
+        executeSqliteQuerySync(
+          database.db,
+          getSessionKysely(database.db)
+            .selectFrom("session_transcript_archives")
+            .select("published_at"),
+        ).rows,
+      ).toEqual(archives.map(() => ({ published_at: null })));
+
+      const changedContent = [
+        { type: "session", id: "new" },
+        { ...answer, text: "changed but valid transcript content" },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join("\n");
+      const changedBytes = compressed
+        ? encodeSessionArchiveContent(changedContent).bytes
+        : Buffer.from(changedContent);
+      runOpenClawAgentWriteTransaction(
+        () => {
+          executeSqliteQuerySync(
+            database.db,
+            getSessionKysely(database.db)
+              .updateTable("session_transcript_archives")
+              .set({ archive_blob: changedBytes })
+              .where("session_id", "=", "new"),
+          );
+        },
+        { agentId: "main", env, path: storePath },
+      );
+      const matchCorrupt = vi.fn(message);
+      expect(() =>
+        findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "new" }, matchCorrupt),
+      ).toThrow("Archived transcript bytes do not match their registered hash");
+      expect(matchCorrupt).not.toHaveBeenCalled();
+    },
+  );
+
   it("resolves a registered exact store once per batch and observes its next owner", () => {
     const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-target-") };
     const storePath = path.join(env.OPENCLAW_STATE_DIR, "registered.sqlite");

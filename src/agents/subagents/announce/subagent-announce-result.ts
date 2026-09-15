@@ -1,11 +1,11 @@
 /** Exact-run final answer reads for subagent completion announcements. */
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../../sessions/transcript-events.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
@@ -13,7 +13,6 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "../registry/subagent-lifecycle-events.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 
@@ -26,16 +25,12 @@ export type SubagentAnnounceResultDeps = Pick<
   | "resolveSessionStorePathCore"
 > & {
   findTranscriptEvent: typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent;
-  listSessionTranscriptArchivesReadOnly: typeof import("../../../config/sessions/session-history.js").listSessionTranscriptArchivesReadOnly;
-  readSessionArchiveContentSync: typeof import("../../../config/sessions/archive-compression.js").readSessionArchiveContentSync;
-  resolveSqliteTranscriptArchiveDirectory: typeof import("../../../config/sessions/session-accessor.sqlite-scope.js").resolveSqliteTranscriptArchiveDirectory;
-  resolveSqliteTranscriptReadScope: typeof import("../../../config/sessions/session-accessor.sqlite-scope.js").resolveSqliteTranscriptReadScope;
+  findSessionTranscriptArchiveEventReadOnly: typeof import("../../../config/sessions/session-history.js").findSessionTranscriptArchiveEventReadOnly;
 };
 
-type AnnounceChild = Pick<
-  SubagentRunRecord,
-  "runId" | "childSessionKey" | "execution" | "completion"
->;
+type AnnounceChild = Pick<ChildCompletionRow, "childSessionKey" | "execution" | "completion"> & {
+  runId: string;
+};
 export type PreparedAnnounceResult = { text: string | undefined; isCurrent: () => boolean };
 
 function captureAnnounceResultAuthority(child: AnnounceChild): () => boolean {
@@ -90,40 +85,11 @@ export async function readSubagentRunAnnounceResultUsing(
     : undefined;
   let event: unknown = found?.event;
   if (!event) {
-    // Delete cleanup archives the transcript before requester settlement. Its
-    // registered session identity and stored run id still identify this answer.
-    const archives = deps
-      .listSessionTranscriptArchivesReadOnly({
-        ...scope,
-        sessionIds: [sessionId ?? sessionKey],
-      })
-      .filter((archive) =>
-        sessionId ? archive.sessionId === sessionId : archive.sessionKey === sessionKey,
-      )
-      .toReversed();
-    for (const archive of archives) {
-      const directory = deps.resolveSqliteTranscriptArchiveDirectory(
-        deps.resolveSqliteTranscriptReadScope({
-          ...scope,
-          sessionId: archive.sessionId,
-        }),
-      );
-      const events: unknown[] = deps
-        .readSessionArchiveContentSync(path.join(directory, archive.archiveName))
-        .split("\n")
-        .filter((line) => line.trim())
-        .map((line) => JSON.parse(line));
-      const header = events[0];
-      if (!isRecord(header) || header.type !== "session" || header.id !== archive.sessionId) {
-        throw new Error(
-          "The completed child run's archive does not match its transcript identity.",
-        );
-      }
-      event = events.findLast(matchesRun);
-      if (event) {
-        break;
-      }
-    }
+    // Delete commits the canonical archive before its derived file is published.
+    event = deps.findSessionTranscriptArchiveEventReadOnly(
+      { ...scope, sessionId },
+      matchesRun,
+    )?.event;
   }
   if (!isCurrent()) {
     throw new Error("The completed child run's transcript identity changed during announcement.");
@@ -169,9 +135,11 @@ function truncateChildCompletionField(value: string): string {
     : value;
 }
 
-type ChildCompletionExecution = {
+type CompletionResultSource = Parameters<typeof resolveSubagentCompletionResultText>[0];
+type ChildCompletionExecution = CompletionResultSource["execution"] & {
   endedAt?: number;
-  outcome?: SubagentRunRecord["execution"]["outcome"];
+  outcome?: NonNullable<CompletionResultSource["execution"]["outcome"]> & { error?: string };
+  transcriptTarget?: AgentRunSessionTarget;
 };
 
 export type ChildCompletionRow = {

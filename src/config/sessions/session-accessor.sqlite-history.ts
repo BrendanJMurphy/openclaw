@@ -1,12 +1,20 @@
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { decodeSessionArchiveBytes } from "./archive-compression.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
+import { hashSessionArchiveBytes } from "./session-accessor.sqlite-archive-artifact.js";
 import type {
   SessionAccessScope,
   SessionTranscriptInstance,
   SessionTranscriptInstanceListOptions,
+  TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import {
   getSessionKysely,
@@ -103,6 +111,36 @@ export function listTranscriptInstancesFromDatabase(params: {
     .filter((entry): entry is SessionTranscriptInstance => entry !== undefined);
 }
 
+function listTranscriptArchivesFromDatabase(
+  { db, agentId }: Pick<OpenClawAgentDatabase, "db" | "agentId">,
+  logicalAgentId: string,
+  selectors: readonly string[],
+  archiveNames: readonly string[],
+) {
+  let query = getSessionKysely(db)
+    .selectFrom("session_transcript_archives")
+    .select([
+      "archive_name as archiveName",
+      "session_id as sessionId",
+      "session_key as sessionKey",
+      "created_at as createdAt",
+    ])
+    .orderBy("created_at")
+    .orderBy("session_id");
+  query = query.where((expression) =>
+    expression.or([
+      ...(selectors.length > 0
+        ? [expression("session_id", "in", selectors), expression("session_key", "in", selectors)]
+        : []),
+      ...(archiveNames.length > 0 ? [expression("archive_name", "in", archiveNames)] : []),
+    ]),
+  );
+  const rows = executeSqliteQuerySync(db, query).rows;
+  return rows.filter(
+    (row) => resolveAgentIdFromSessionKey(row.sessionKey, agentId) === logicalAgentId,
+  );
+}
+
 /** Read retained archive identities through the same physical and logical session owner. */
 export function listSessionTranscriptArchivesReadOnly(
   scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
@@ -116,29 +154,78 @@ export function listSessionTranscriptArchivesReadOnly(
     return [];
   }
   const resolved = resolveSqliteReadScope(scope);
-  const result = withOpenClawAgentDatabaseReadOnly(({ db, agentId }) => {
-    let query = getSessionKysely(db)
-      .selectFrom("session_transcript_archives")
-      .select([
-        "archive_name as archiveName",
-        "session_id as sessionId",
-        "session_key as sessionKey",
-        "created_at as createdAt",
-      ])
-      .orderBy("created_at")
-      .orderBy("session_id");
-    query = query.where((expression) =>
-      expression.or([
-        ...(selectors.length > 0
-          ? [expression("session_id", "in", selectors), expression("session_key", "in", selectors)]
-          : []),
-        ...(archiveNames.length > 0 ? [expression("archive_name", "in", archiveNames)] : []),
-      ]),
-    );
-    const rows = executeSqliteQuerySync(db, query).rows;
-    return rows.filter(
-      (row) => resolveAgentIdFromSessionKey(row.sessionKey, agentId) === resolved.agentId,
-    );
-  }, toDatabaseOptions(resolved));
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      listTranscriptArchivesFromDatabase(database, resolved.agentId, selectors, archiveNames),
+    toDatabaseOptions(resolved),
+  );
   return result.found ? result.value : [];
+}
+
+/** Reads committed archive content before its optional filesystem export is published. */
+export function findSessionTranscriptArchiveEventReadOnly(
+  scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
+    sessionId?: string;
+    sessionKey: string;
+  },
+  match: (event: TranscriptEvent) => boolean,
+): { event: TranscriptEvent } | undefined {
+  const resolved = resolveSqliteReadScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      runSqliteDeferredTransactionSync(
+        database.db,
+        () => {
+          const { db } = database;
+          const archives = listTranscriptArchivesFromDatabase(
+            database,
+            resolved.agentId,
+            [scope.sessionId ?? scope.sessionKey],
+            [],
+          )
+            .filter((archive) =>
+              scope.sessionId
+                ? archive.sessionId === scope.sessionId
+                : archive.sessionKey === scope.sessionKey,
+            )
+            .toReversed();
+          for (const archive of archives) {
+            const row = executeSqliteQueryTakeFirstSync(
+              db,
+              getSessionKysely(db)
+                .selectFrom("session_transcript_archives")
+                .select(["archive_blob", "archive_sha256", "encoding"])
+                .where("archive_name", "=", archive.archiveName)
+                .where("session_id", "=", archive.sessionId)
+                .where("session_key", "=", archive.sessionKey),
+            );
+            if (!row) {
+              continue;
+            }
+            if (hashSessionArchiveBytes(row.archive_blob) !== row.archive_sha256) {
+              throw new Error("Archived transcript bytes do not match their registered hash.");
+            }
+            const events: TranscriptEvent[] = decodeSessionArchiveBytes(
+              row.archive_blob,
+              row.encoding === "zstd",
+            )
+              .split("\n")
+              .filter((line) => line.trim())
+              .map((line) => JSON.parse(line));
+            const header = events[0];
+            if (!isRecord(header) || header.type !== "session" || header.id !== archive.sessionId) {
+              throw new Error("Archived transcript header does not match its registered session.");
+            }
+            const event = events.findLast(match);
+            if (event !== undefined) {
+              return { event };
+            }
+          }
+          return undefined;
+        },
+        { operationLabel: "session transcript archive read" },
+      ),
+    toDatabaseOptions(resolved),
+  );
+  return result.found ? result.value : undefined;
 }

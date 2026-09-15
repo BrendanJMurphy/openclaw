@@ -50,31 +50,16 @@ describe("exact-run announcement results", () => {
       resolveSessionStorePathCore: () => "/tmp/completed-session-store",
       readSubagentSessionEntry: () =>
         deletedSession ? undefined : { sessionId: "completed-session", updatedAt: 1 },
-      listSessionTranscriptArchivesReadOnly: (scope) => {
-        expect(scope.sessionIds).toEqual([
-          deletedSession ? "agent:main:subagent:completed" : "completed-session",
-        ]);
-        return archiveEvents
-          ? [
-              {
-                archiveName: "completed-session.deleted.jsonl.gz",
-                sessionId: "completed-session",
-                sessionKey: "agent:main:subagent:completed",
-                createdAt: 2,
-              },
-            ]
-          : [];
+      findSessionTranscriptArchiveEventReadOnly: (scope, match) => {
+        expect(scope).toEqual({
+          agentId: "main",
+          storePath: "/tmp/completed-session-store",
+          sessionId: deletedSession ? undefined : "completed-session",
+          sessionKey: "agent:main:subagent:completed",
+        });
+        const event = archiveEvents?.findLast(match);
+        return event === undefined ? undefined : { event };
       },
-      readSessionArchiveContentSync: (archivePath) => {
-        expect(archivePath).toBe("/tmp/completion-archives/completed-session.deleted.jsonl.gz");
-        return (archiveEvents ?? []).map((event) => JSON.stringify(event)).join("\n");
-      },
-      resolveSqliteTranscriptReadScope: (scope) => ({
-        agentId: "main",
-        sessionId: scope.sessionId,
-        sessionKey: scope.sessionKey,
-      }),
-      resolveSqliteTranscriptArchiveDirectory: () => "/tmp/completion-archives",
     });
     return findTranscriptEvent;
   }
@@ -249,7 +234,6 @@ describe("exact-run announcement results", () => {
     installTranscript(
       [],
       [
-        { type: "session", id: "completed-session" },
         assistant("previous-run", "older archive result"),
         assistant(child.runId, text),
         assistant("replacement-run", "newer archive result"),
@@ -258,31 +242,19 @@ describe("exact-run announcement results", () => {
 
     const prepared = await readChildCompletionFindings([child]);
     expect(prepared.text).toContain(`${"&lt;archived&gt;".repeat(700)}required-archive-tail`);
+    expect(prepared.text).not.toContain("older archive result");
+    expect(prepared.text).not.toContain("newer archive result");
     expect(child.completion?.terminalReply).toBe(terminalReply);
     expect(terminalReply).toEqual({ disposition: "visible", text: `${text.slice(0, 4_095)}…` });
   });
 
-  it.each([
-    {
-      sessionId: "replacement-session",
-      runId: "completed-run",
-      name: "wrong session header",
-      error: "archive does not match its transcript identity",
-    },
-    {
-      sessionId: "completed-session",
-      runId: "replacement-run",
-      name: "wrong run",
-      error: "final answer is unavailable in its transcript",
-    },
-  ])("rejects a registered archive with a $name", async ({ sessionId, runId, error }) => {
+  it("rejects a registered archive without the exact run", async () => {
     const child = completedChild("bounded producer evidence");
-    installTranscript(
-      [],
-      [{ type: "session", id: sessionId }, assistant(runId, "unrelated archive answer")],
-    );
+    installTranscript([], [assistant("replacement-run", "unrelated archive answer")]);
 
-    await expect(readSubagentRunAnnounceResult(child)).rejects.toThrow(error);
+    await expect(readSubagentRunAnnounceResult(child)).rejects.toThrow(
+      "final answer is unavailable in its transcript",
+    );
   });
 
   it("rejects missing exact-run output instead of substituting another run or the snapshot", async () => {
@@ -322,7 +294,6 @@ describe("exact-run announcement results", () => {
     installTranscript(
       [],
       [
-        { type: "session", id: "completed-session" },
         assistant("old-run", "stale previous answer"),
         assistant(child.runId, text),
         assistant("replacement-run", "stale replacement answer"),

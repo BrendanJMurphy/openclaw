@@ -6,23 +6,17 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
  * Reads child session output, detects waiting states, and formats completion findings for announcements.
  */
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import { readSessionArchiveContentSync } from "../../../config/sessions/archive-compression.js";
 import {
   findTranscriptEvent,
   type SessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
-import {
-  resolveSqliteTranscriptArchiveDirectory,
-  resolveSqliteTranscriptReadScope,
-} from "../../../config/sessions/session-accessor.sqlite-scope.js";
-import { listSessionTranscriptArchivesReadOnly } from "../../../config/sessions/session-history.js";
+import { findSessionTranscriptArchiveEventReadOnly } from "../../../config/sessions/session-history.js";
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
@@ -61,10 +55,7 @@ type SubagentAnnounceOutputDeps = SubagentAnnounceResultDeps & {
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   findTranscriptEvent,
-  listSessionTranscriptArchivesReadOnly,
-  readSessionArchiveContentSync,
-  resolveSqliteTranscriptArchiveDirectory,
-  resolveSqliteTranscriptReadScope,
+  findSessionTranscriptArchiveEventReadOnly,
   callGateway: callSubagentLifecycleGateway,
   getRuntimeConfig,
   readSubagentSessionEntry,
@@ -410,7 +401,7 @@ export async function readSubagentRunAnnounceResult(
 
 /** Prepare complete result text without changing the bounded lifecycle evidence. */
 export async function readChildCompletionFindings(
-  children: SubagentRunRecord[],
+  children: Array<ChildCompletionRow & { runId: string }>,
 ): Promise<PreparedAnnounceResult> {
   const results = await Promise.all(
     children.map(async (child) => ({
