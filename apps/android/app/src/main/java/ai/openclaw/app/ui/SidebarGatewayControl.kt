@@ -32,9 +32,11 @@ import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTonalElevationEnabled
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -120,15 +122,7 @@ internal fun SidebarGatewayControl(
       Text(label, style = ClawTheme.type.body, color = palette.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
       if (entries.isNotEmpty()) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          GatewayStatusDot(connection, palette.muted)
-          Text(
-            text = gatewayStatusLabel(connection),
-            modifier = Modifier.weight(1f, fill = false),
-            style = ClawTheme.type.caption,
-            color = palette.muted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
+          GatewayStatus(connection, palette, Modifier.weight(1f, fill = false))
           Text(savedGatewayCount(entries.size), style = ClawTheme.type.caption, color = palette.muted, maxLines = 1)
         }
       }
@@ -141,6 +135,7 @@ internal fun SidebarGatewayControl(
     key(geometry) {
       GatewayPickerSheet(
         geometry = geometry,
+        palette = palette,
         entries = entries,
         focusedStableId = handoff.focusedStableId,
         connection = connection,
@@ -176,6 +171,7 @@ private fun gatewayPickerAddress(entry: GatewayRegistryEntry): String {
 @Composable
 private fun GatewayPickerSheet(
   geometry: FoldAwareSheetState,
+  palette: SidebarPalette,
   entries: List<GatewayRegistryEntry>,
   focusedStableId: String?,
   connection: GatewayConnectionDisplay,
@@ -188,113 +184,113 @@ private fun GatewayPickerSheet(
   val showSearch = entries.size > 4
   val filter = if (showSearch) query.trim() else ""
   val visible = entries.filter { it.name.contains(filter, ignoreCase = true) || gatewayPickerAddress(it).contains(filter, ignoreCase = true) }
-  val colors = ClawTheme.colors
   val density = LocalDensity.current
-  ModalBottomSheet(
-    modifier = Modifier.foldAwareSheet(geometry),
-    onDismissRequest = onDismiss,
-    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-    containerColor = colors.surface,
-    contentColor = colors.text,
-    contentWindowInsets = { WindowInsets.safeDrawing },
-    dragHandle = { BottomSheetDefaults.DragHandle(color = colors.textSubtle) },
-  ) {
-    CompositionLocalProvider(LocalDensity provides density) {
-      // Keep one bounded viewport as search and registry updates change the rows.
-      // Resizing the content under the native fold host can leave its previous sheet offset.
-      BoxWithConstraints(
-        Modifier
-          .fillMaxWidth()
-          .heightIn(max = 620.dp)
-          .fillMaxHeight()
-          .testTag("gateway-picker-sheet"),
-      ) {
-        // The search field stays in the same lazy item when the keyboard changes pane height.
-        // Only management moves into the list in a short pane so results retain a viewport.
-        val scrollControls = maxHeight < 320.dp * density.fontScale
-        val header: @Composable () -> Unit = {
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Column(Modifier.weight(1f)) {
-              Text(nativeString("Gateways"), style = ClawTheme.type.title)
-              Text(savedGatewayCount(entries.size), style = ClawTheme.type.caption, color = colors.textMuted)
-            }
-            TextButton(onClick = openSettings) {
-              Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-              Text(nativeString("Add Gateway"), modifier = Modifier.padding(start = 4.dp))
-            }
-          }
-          if (showSearch) {
-            OutlinedTextField(
-              value = query,
-              onValueChange = { query = it },
-              label = { Text(nativeString("Search gateways")) },
-              singleLine = true,
-              modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp).testTag("gateway-picker-search"),
-            )
-          }
-        }
-        val manage: @Composable () -> Unit = {
-          Column {
-            HorizontalDivider(color = colors.border, thickness = 0.5.dp, modifier = Modifier.padding(top = 8.dp))
-            Row(
-              modifier =
-                Modifier
-                  .fillMaxWidth()
-                  .clickable(role = Role.Button, onClick = openSettings)
-                  .heightIn(min = 56.dp)
-                  .padding(horizontal = 24.dp, vertical = 12.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-              Icon(Icons.Outlined.Settings, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(20.dp))
-              Text(nativeString("Manage Gateways"), style = ClawTheme.type.body)
-            }
-          }
-        }
-        Column(Modifier.fillMaxHeight()) {
-          LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("gateway-picker-list")) {
-            item(key = "header") { header() }
-            if (visible.isEmpty()) {
-              item {
-                Text(nativeString("No matching gateways"), color = colors.textMuted, modifier = Modifier.padding(20.dp))
-              }
-            }
-            items(visible, key = GatewayRegistryEntry::stableId) { entry ->
-              val selected = entry.stableId == focusedStableId
+  // Match the sidebar exactly, including themes whose canvas equals Material surface.
+  // Surface also adds inherited tonal elevation, so zero elevation alone is insufficient.
+  CompositionLocalProvider(LocalTonalElevationEnabled provides false) {
+    ModalBottomSheet(
+      modifier = Modifier.foldAwareSheet(geometry),
+      onDismissRequest = onDismiss,
+      sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+      containerColor = palette.background,
+      tonalElevation = 0.dp,
+      contentColor = palette.text,
+      contentWindowInsets = { WindowInsets.safeDrawing },
+      dragHandle = { BottomSheetDefaults.DragHandle(color = palette.muted) },
+    ) {
+      CompositionLocalProvider(LocalDensity provides density) {
+        // Keep one bounded viewport as search and registry updates change the rows.
+        // Resizing the content under the native fold host can leave its previous sheet offset.
+        BoxWithConstraints(
+          Modifier
+            .fillMaxWidth()
+            .heightIn(max = 620.dp)
+            .fillMaxHeight()
+            .testTag("gateway-picker-sheet"),
+        ) {
+          // The search field stays in the same lazy item when the keyboard changes pane height.
+          // Only management moves into the list in a short pane so results retain a viewport.
+          val scrollControls = maxHeight < 320.dp * density.fontScale
+          val manage: @Composable () -> Unit = {
+            Column {
+              HorizontalDivider(color = palette.hairline, thickness = 0.5.dp, modifier = Modifier.padding(top = 8.dp))
               Row(
                 modifier =
                   Modifier
-                    .padding(horizontal = 12.dp, vertical = 2.dp)
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(ClawTheme.radii.row))
-                    .background(if (selected) colors.surfacePressed else Color.Transparent)
-                    .selectable(selected = selected, enabled = selectionEnabled, role = Role.RadioButton) { onSelect(entry.stableId) }
-                    .semantics { if (selected) stateDescription = gatewayStatusLabel(connection) }
-                    .heightIn(min = 64.dp)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .clickable(role = Role.Button, onClick = openSettings)
+                    .heightIn(min = 56.dp)
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
               ) {
-                Icon(Icons.Outlined.Storage, contentDescription = null, tint = colors.textMuted, modifier = Modifier.size(20.dp))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                  Text(entry.name, style = ClawTheme.type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                  Text(gatewayPickerAddress(entry), style = ClawTheme.type.caption, color = colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                  if (selected) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                      GatewayStatusDot(connection, colors.textMuted)
-                      Text(gatewayStatusLabel(connection), style = ClawTheme.type.caption, color = colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                  }
-                }
-                if (selected) Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(20.dp))
+                Icon(Icons.Outlined.Settings, contentDescription = null, tint = palette.muted, modifier = Modifier.size(20.dp))
+                Text(nativeString("Manage Gateways"), style = ClawTheme.type.body)
               }
             }
-            if (scrollControls) item(key = "manage") { manage() }
           }
-          if (!scrollControls) manage()
+          Column(Modifier.fillMaxHeight()) {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("gateway-picker-list")) {
+              item(key = "header") {
+                Row(
+                  modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                ) {
+                  Column(Modifier.weight(1f)) {
+                    Text(nativeString("Gateways"), style = ClawTheme.type.title)
+                    Text(savedGatewayCount(entries.size), style = ClawTheme.type.caption, color = palette.muted)
+                  }
+                  TextButton(onClick = openSettings, colors = ButtonDefaults.textButtonColors(contentColor = palette.text)) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text(nativeString("Add Gateway"), modifier = Modifier.padding(start = 4.dp))
+                  }
+                }
+                if (showSearch) {
+                  OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    label = { Text(nativeString("Search gateways")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp).testTag("gateway-picker-search"),
+                  )
+                }
+              }
+              if (visible.isEmpty()) {
+                item {
+                  Text(nativeString("No matching gateways"), color = palette.muted, modifier = Modifier.padding(20.dp))
+                }
+              }
+              items(visible, key = GatewayRegistryEntry::stableId) { entry ->
+                val selected = entry.stableId == focusedStableId
+                Row(
+                  modifier =
+                    Modifier
+                      .padding(horizontal = 12.dp, vertical = 2.dp)
+                      .fillMaxWidth()
+                      .clip(RoundedCornerShape(ClawTheme.radii.row))
+                      .background(if (selected) palette.selection else Color.Transparent)
+                      .selectable(selected = selected, enabled = selectionEnabled, role = Role.RadioButton) { onSelect(entry.stableId) }
+                      .semantics { if (selected) stateDescription = gatewayStatusLabel(connection) }
+                      .heightIn(min = 64.dp)
+                      .padding(horizontal = 12.dp, vertical = 10.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                  Icon(Icons.Outlined.Storage, contentDescription = null, tint = palette.muted, modifier = Modifier.size(20.dp))
+                  Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(entry.name, style = ClawTheme.type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(gatewayPickerAddress(entry), style = ClawTheme.type.caption, color = palette.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (selected) {
+                      GatewayStatus(connection, palette)
+                    }
+                  }
+                  if (selected) Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(20.dp))
+                }
+              }
+              if (scrollControls) item(key = "manage") { manage() }
+            }
+            if (!scrollControls) manage()
+          }
         }
       }
     }
@@ -302,15 +298,26 @@ private fun GatewayPickerSheet(
 }
 
 @Composable
-private fun GatewayStatusDot(
+private fun GatewayStatus(
   connection: GatewayConnectionDisplay,
-  muted: Color,
+  palette: SidebarPalette,
+  modifier: Modifier = Modifier,
 ) {
-  Box(
-    Modifier
-      .size(6.dp)
-      .clip(CircleShape)
-      .background(if (connection.isConnected) ClawTheme.colors.success else muted)
-      .clearAndSetSemantics {},
-  )
+  Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Box(
+      Modifier
+        .size(6.dp)
+        .clip(CircleShape)
+        .background(if (connection.isConnected) ClawTheme.colors.success else palette.muted)
+        .clearAndSetSemantics {},
+    )
+    Text(
+      gatewayStatusLabel(connection),
+      modifier = Modifier.weight(1f, fill = false),
+      style = ClawTheme.type.caption,
+      color = palette.muted,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+  }
 }

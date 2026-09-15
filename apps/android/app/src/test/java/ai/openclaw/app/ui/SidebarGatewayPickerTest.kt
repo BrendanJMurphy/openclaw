@@ -22,24 +22,29 @@ import ai.openclaw.app.ui.design.clawColorsForTheme
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.provider.Settings
 import android.view.inspector.WindowInspector
+import androidx.activity.ComponentDialog
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.LocalAbsoluteTonalElevation
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -52,6 +57,8 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isSelectable
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -62,6 +69,9 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import androidx.window.layout.WindowInfoTracker
@@ -86,6 +96,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowDialog
 import org.robolectric.shadows.ShadowToast
 import org.robolectric.util.ReflectionHelpers
 import java.io.File
@@ -98,13 +109,12 @@ import java.net.InetAddress
 class SidebarGatewayPickerTest {
   @get:Rule val composeRule = createComposeRule()
   private val store = ViewModelStore()
-  private val restoration =
-    androidx.compose.ui.test.junit4
-      .StateRestorationTester(composeRule)
+  private val restoration = StateRestorationTester(composeRule)
   private val mounted = mutableStateOf(true)
   private val themeMode = mutableStateOf(AppearanceThemeMode.Dark)
   private val themeFamily = mutableStateOf(AppearanceThemeFamily.Claw)
   private val accentArgb = mutableStateOf<Long?>(null)
+  private val tonalElevation = mutableStateOf(0.dp)
   private val servers = mutableListOf<MockWebServer>()
   private lateinit var app: NodeApp
   private lateinit var prefs: SecurePrefs
@@ -150,11 +160,7 @@ class SidebarGatewayPickerTest {
     capture("sheet-footer")
     openPicker()
     capture("sheet-picker", popup = true)
-    composeRule
-      .onNode(
-        androidx.compose.ui.test
-          .isDialog(),
-      ).assertExists()
+    composeRule.onNode(isDialog()).assertExists()
     composeRule.onNodeWithText("ws://127.0.0.1:${alpha.port}").assertIsDisplayed()
     composeRule.onNodeWithText("ws://127.0.0.1:${beta.port}").assertIsDisplayed()
   }
@@ -168,23 +174,13 @@ class SidebarGatewayPickerTest {
     composeRule.onNodeWithTag("gateway-picker-search").performClick().performTextReplacement("Research")
     composeRule.onNodeWithTag("gateway-picker-search").assertIsFocused()
     composeRule.runOnIdle {
-      val dialog =
-        org.robolectric.shadows.ShadowDialog
-          .getLatestDialog()
-      androidx.core.view.ViewCompat.dispatchApplyWindowInsets(
-        checkNotNull(dialog.window).decorView,
-        androidx.core.view.WindowInsetsCompat
+      ViewCompat.dispatchApplyWindowInsets(
+        checkNotNull(ShadowDialog.getLatestDialog().window).decorView,
+        WindowInsetsCompat
           .Builder()
-          .setInsets(
-            androidx.core.view.WindowInsetsCompat.Type
-              .ime(),
-            androidx.core.graphics.Insets
-              .of(0, 0, 0, 600),
-          ).setVisible(
-            androidx.core.view.WindowInsetsCompat.Type
-              .ime(),
-            true,
-          ).build(),
+          .setInsets(WindowInsetsCompat.Type.ime(), Insets.of(0, 0, 0, 600))
+          .setVisible(WindowInsetsCompat.Type.ime(), true)
+          .build(),
       )
     }
     composeRule.waitForIdle()
@@ -197,9 +193,7 @@ class SidebarGatewayPickerTest {
         .size.height > 0,
     )
     composeRule.onNodeWithTag("gateway-picker-list").performScrollToNode(
-      hasText(gateways.last().name) and
-        androidx.compose.ui.test
-          .isSelectable(),
+      hasText(gateways.last().name) and isSelectable(),
     )
     gatewayItem(gateways.last()).assertIsDisplayed()
     capture("ime-short-pane", popup = true)
@@ -245,52 +239,61 @@ class SidebarGatewayPickerTest {
 
   @Test
   @Config(qualifiers = "w1000dp-h800dp-night-mdpi")
-  fun systemDarkThemeRecolorsTheExistingSheet() = assertThemeSwitching()
+  fun systemDarkThemeRecolorsTheExistingSheet() = assertThemeSwitching(startLight = true)
 
-  private fun assertThemeSwitching() {
+  private fun assertThemeSwitching(startLight: Boolean = false) {
     val alpha = savedGateway("Research")
     savedGateway("Documentation")
     focus(alpha)
     showSidebarAndComposer(showComposer = false)
     openPicker()
     val windows = WindowInspector.getGlobalWindowViews().filter { it.isAttachedToWindow }
-    for (mode in listOf(AppearanceThemeMode.Dark, AppearanceThemeMode.Light, AppearanceThemeMode.System, AppearanceThemeMode.Dark)) {
-      composeRule.runOnIdle { themeMode.value = mode }
-      composeRule.waitForIdle()
-      gatewayItem(alpha).assertIsSelected()
-      val bitmap = composeRule.onNodeWithTag("gateway-picker-sheet").captureToImage().toPixelMap()
-      val systemDark = app.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
-      assertEquals(mode.isDark(systemDark), bitmap[0, 0].luminance() < 0.5f)
-      assertEquals(windows, WindowInspector.getGlobalWindowViews().filter { it.isAttachedToWindow })
-      capture("theme-$mode", popup = true)
-    }
-    for (family in AppearanceThemeFamily.entries) {
-      composeRule.runOnIdle {
-        themeFamily.value = family
-        accentArgb.value = 0xFF37A6C8
+    val modes = if (startLight) listOf(AppearanceThemeMode.Light, AppearanceThemeMode.Dark, AppearanceThemeMode.System) else listOf(AppearanceThemeMode.Dark, AppearanceThemeMode.Light, AppearanceThemeMode.System)
+    val families = listOf(AppearanceThemeFamily.Crt) + AppearanceThemeFamily.entries.filterNot { it == AppearanceThemeFamily.Crt }
+    for (family in families) {
+      for (mode in modes) {
+        for (accent in listOf(null, 0xFF37A6C8L)) {
+          composeRule.runOnIdle {
+            themeFamily.value = family
+            themeMode.value = mode
+            accentArgb.value = accent
+            // A native sheet must not inherit a parent's surface tint, even when canvas == surface.
+            tonalElevation.value = 12.dp
+          }
+          composeRule.waitForIdle()
+          val systemDark = app.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+          val palette = sidebarPalette(clawColorsForTheme(dark = mode.isDark(systemDark), family = family, accentArgb = accent))
+          val sheet = composeRule.onNodeWithTag("gateway-picker-sheet").captureToImage().toPixelMap()
+          val row = gatewayItem(alpha).captureToImage().toPixelMap()
+          val navigation =
+            composeRule
+              .onNodeWithText("Home")
+              .assertIsSelected()
+              .captureToImage()
+              .toPixelMap()
+          val sidebar = composeRule.onNodeWithTag("gateway-proof").captureToImage().toPixelMap()
+          if (family == AppearanceThemeFamily.Crt || family == AppearanceThemeFamily.Claw) {
+            capture("palette-$family-$mode-${accent != null}", popup = true)
+          }
+          assertEquals("Sheet background must match sidebar: $family/$mode/$accent", palette.background.toArgb(), sheet[0, 0].toArgb())
+          assertEquals("Sidebar background remains canonical: $family/$mode/$accent", palette.background.toArgb(), sidebar[0, sidebar.height / 2].toArgb())
+          // Compare actual rasterized owners, not float compositing against 8-bit pixels.
+          assertEquals("Selected gateway must match sidebar selection: $family/$mode/$accent", navigation[navigation.width / 2, 4].toArgb(), row[row.width / 2, 4].toArgb())
+          gatewayItem(alpha).assertIsSelected()
+          assertEquals(windows, WindowInspector.getGlobalWindowViews().filter { it.isAttachedToWindow })
+        }
       }
-      composeRule.waitForIdle()
-      val colors = clawColorsForTheme(dark = true, family = family, accentArgb = accentArgb.value)
-      val bitmap = composeRule.onNodeWithTag("gateway-picker-sheet").captureToImage().toPixelMap()
-      assertEquals("Sheet surface follows $family, not the custom accent", colors.surface, bitmap[0, 0])
-      gatewayItem(alpha).assertIsSelected()
-      assertEquals(windows, WindowInspector.getGlobalWindowViews().filter { it.isAttachedToWindow })
     }
     capture("theme-custom-accent", popup = true)
     composeRule
-      .onNode(
-        androidx.compose.ui.test.SemanticsMatcher
-          .keyIsDefined(androidx.compose.ui.semantics.SemanticsActions.Dismiss),
-      ).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.Dismiss)
+      .onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss))
+      .performSemanticsAction(SemanticsActions.Dismiss)
     composeRule.waitForIdle()
     composeRule.onAllNodes(isDialog()).assertCountEquals(0)
     openPicker()
     gatewayItem(alpha).assertIsSelected()
     composeRule.runOnUiThread {
-      (
-        org.robolectric.shadows.ShadowDialog
-          .getLatestDialog() as androidx.activity.ComponentDialog
-      ).onBackPressedDispatcher.onBackPressed()
+      (ShadowDialog.getLatestDialog() as ComponentDialog).onBackPressedDispatcher.onBackPressed()
     }
     composeRule.waitForIdle()
     composeRule.onAllNodes(isDialog()).assertCountEquals(0)
@@ -449,11 +452,7 @@ class SidebarGatewayPickerTest {
     } finally {
       barrier.unlock()
     }
-    composeRule.waitUntil {
-      composeRule.runOnIdle {
-        runtime.gatewayConnectionHandoff.value.let { !it.pending && it.focusedStableId == gamma.stableId }
-      }
-    }
+    awaitFocus(gamma)
     composeRule.onNodeWithText("Message OpenClaw").assertIsEnabled()
     composeRule.runOnIdle { assertFalse(runtime.gatewayConnectionDisplay.value.isConnected) }
   }
@@ -479,9 +478,7 @@ class SidebarGatewayPickerTest {
     val authorization = requireNotNull(model.chatComposerState.beginMediaAcquisition(owner))
     // Another existing navigation consumer can switch while the external picker is away.
     composeRule.runOnIdle { model.switchToGateway(beta.stableId) }
-    composeRule.waitUntil {
-      composeRule.runOnIdle { runtime.gatewayConnectionHandoff.value.let { !it.pending && it.focusedStableId == beta.stableId } }
-    }
+    awaitFocus(beta)
     val attachment = PendingAttachment("late-file", "late-alpha.txt", "text/plain", "QQ==")
     composeRule.runOnIdle {
       model.chatComposerState.addAuthorizedAttachments(owner, authorization, listOf(attachment))
@@ -637,7 +634,7 @@ class SidebarGatewayPickerTest {
         val sessions by model.chatSessions.collectAsState()
         val sessionKey by model.chatSessionKey.collectAsState()
         val density = LocalDensity.current
-        CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+        CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale), LocalAbsoluteTonalElevation provides tonalElevation.value) {
           OpenClawTheme(themeMode = themeMode.value) {
             ClawDesignTheme(dark = LocalResolvedAppearanceIsDark.current, family = themeFamily.value, accentArgb = accentArgb.value) {
               Row(Modifier.fillMaxSize().testTag("gateway-proof")) {
