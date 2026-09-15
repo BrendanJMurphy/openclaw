@@ -277,13 +277,19 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           if (!loaded) {
             const loadedStore = measureDiagnosticsTimelineSpanSync(
               "gateway.sessions.list.store_load",
-              () =>
-                loadCombinedSessionStoreForGatewayCore(cfg, {
-                  agentId: p.agentId,
-                  configuredAgentsOnly,
-                  projection: "list",
-                  ...(p.activeOnly === true ? { preserveSentinelOwners: true } : {}),
-                }),
+              () => {
+                const storeCpu = diagnostics?.startSyncCpu();
+                try {
+                  return loadCombinedSessionStoreForGatewayCore(cfg, {
+                    agentId: p.agentId,
+                    configuredAgentsOnly,
+                    projection: "list",
+                    ...(p.activeOnly === true ? { preserveSentinelOwners: true } : {}),
+                  });
+                } finally {
+                  diagnostics?.finishSyncCpu("storeLoadThreadCpuMs", storeCpu);
+                }
+              },
               {
                 config: cfg,
                 phase: "sessions.list",
@@ -342,6 +348,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 cfg,
                 workStartedAt,
                 projectionTiming,
+                cpuTiming: diagnostics,
                 durableStorePath,
                 ...(entryFilter ? { entryFilter } : {}),
                 storePath,
