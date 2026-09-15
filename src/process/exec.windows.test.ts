@@ -645,7 +645,7 @@ describe("Windows command execution", () => {
     });
   });
 
-  it.each(["exec", "command"])("decodes UTF-16 output from %s without probing", async (runner) => {
+  it.each(["exec", "command"])("decodes UTF-16 output from %s", async (runner) => {
     execaMock.mockImplementationOnce(() =>
       createMockSubprocess({
         stdoutChunks: [Buffer.from([0xff, 0xfe, 0x6f, 0x00, 0x6b, 0x00])],
@@ -661,11 +661,11 @@ describe("Windows command execution", () => {
         stdout: "ok",
         stderr: "no",
       });
-      expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(spawnSyncMock).toHaveBeenCalledTimes(runner === "exec" ? 0 : 1);
     });
   });
 
-  it.each(["exec", "command"])("decodes UTF-8 output from %s without probing", async (runner) => {
+  it.each(["exec", "command"])("decodes UTF-8 output from %s", async (runner) => {
     execaMock.mockImplementationOnce(() =>
       createMockSubprocess({ stdoutChunks: [Buffer.from("测试", "utf8")] }),
     );
@@ -678,7 +678,7 @@ describe("Windows command execution", () => {
         stdout: "测试",
         stderr: "",
       });
-      expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(spawnSyncMock).toHaveBeenCalledTimes(runner === "exec" ? 0 : 1);
     });
   });
 
@@ -701,23 +701,28 @@ describe("Windows command execution", () => {
     });
   });
 
-  it("captures the raw result encoding before the child can change the console page", async () => {
-    const stdout = Buffer.from([0xb2, 0xe2]);
-    execaMock.mockImplementationOnce(() => {
-      spawnSyncMock.mockReturnValue({ stdout: "Active code page: 1252", stderr: "" });
-      return createMockSubprocess({ stdoutChunks: [stdout] });
-    });
-    await withMockedWindowsPlatform(async () => {
-      await expect(
-        runCommandBuffersWithTimeout(["node", "raw-output.js"], 1_000),
-      ).resolves.toMatchObject({
-        code: 0,
-        stdout,
-        stderr: Buffer.alloc(0),
-        windowsEncoding: "gbk",
+  it.each(["raw", "command"])(
+    "captures the %s result encoding before the child can change the console page",
+    async (runner) => {
+      const stdout = Buffer.from([0xb2, 0xe2]);
+      const stderr = Buffer.from([0xa3, 0xbb]);
+      execaMock.mockImplementationOnce(() => {
+        spawnSyncMock.mockReturnValue({ stdout: "Active code page: 1252", stderr: "" });
+        return createMockSubprocess({ stdoutChunks: [stdout], stderrChunks: [stderr] });
       });
-    });
-  });
+      await withMockedWindowsPlatform(async () => {
+        const result =
+          runner === "raw"
+            ? runCommandBuffersWithTimeout(["node", "legacy-output.js"], 1_000)
+            : runCommandWithTimeout(["node", "legacy-output.js"], 1_000);
+        await expect(result).resolves.toMatchObject(
+          runner === "raw"
+            ? { code: 0, stdout, stderr, windowsEncoding: "gbk" }
+            : { code: 0, stdout: "测", stderr: "；" },
+        );
+      });
+    },
+  );
 
   it("keeps truncated UTF-8 head output on a code point boundary", async () => {
     execaMock.mockImplementationOnce(() =>
