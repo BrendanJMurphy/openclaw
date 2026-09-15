@@ -122,7 +122,9 @@ describe("session accessor readonly listing", () => {
         { agentId: "main", env, path: storePath },
       );
       const scope = { agentId: "ops", env, storePath, sessionKey };
-      const filesBefore = fs.readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true }).toSorted();
+      const filesBefore = fs
+        .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true })
+        .toSorted((left, right) => left.localeCompare(right));
       const message = (event: unknown) => isRecord(event) && event.type === "message";
 
       expect(findSessionTranscriptArchiveEventReadOnly(scope, message)).toEqual({ event: answer });
@@ -136,9 +138,11 @@ describe("session accessor readonly listing", () => {
       expect(() =>
         findSessionTranscriptArchiveEventReadOnly({ ...scope, sessionId: "invalid" }, message),
       ).toThrow("Archived transcript header does not match its registered session");
-      expect(fs.readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true }).toSorted()).toEqual(
-        filesBefore,
-      );
+      expect(
+        fs
+          .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true })
+          .toSorted((left, right) => left.localeCompare(right)),
+      ).toEqual(filesBefore);
       expect(
         executeSqliteQuerySync(
           database.db,
@@ -353,8 +357,8 @@ describe("session accessor readonly listing", () => {
       listed
         .filter(({ sessionKey }) => !["global", "unknown"].includes(sessionKey))
         .map(({ sessionKey }) => sessionKey)
-        .toSorted(),
-    ).toEqual(expectedKeys.toSorted());
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(expectedKeys.toSorted((left, right) => left.localeCompare(right)));
     const summary = readSessionStoreSummaryReadOnly(scope, options);
     expect(summary.count).toBe(7);
     expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(expectedKeys.slice(0, 3));
