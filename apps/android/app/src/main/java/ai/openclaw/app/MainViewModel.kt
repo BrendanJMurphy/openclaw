@@ -580,6 +580,7 @@ class MainViewModel private constructor(
   internal val healthLogsState = runtimeState(initial = GatewaySummaryState<GatewayHealthLogsSummary>()) { it.healthLogsState }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val gatewayAccentArgb: StateFlow<Long?> = runtimeState(initial = null) { it.gatewayAccentArgb }
+  val gatewaySourcePreviewConfig: StateFlow<ai.openclaw.app.gateway.GatewaySourcePreviewConfig?> = runtimeState(initial = null) { it.gatewaySourcePreviewConfig }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
 
   val instanceId: StateFlow<String> = prefs.instanceId
@@ -1438,6 +1439,11 @@ class MainViewModel private constructor(
     path: String,
     failedResource: ChatWidgetResource?,
   ) = ensureRuntime().resolveInlineWidgetResource(path, failedResource)
+
+  internal suspend fun loadChatSourceFavicon(
+    config: ai.openclaw.app.gateway.GatewaySourcePreviewConfig,
+    hostname: String,
+  ) = ensureRuntime().loadChatSourceFavicon(config, hostname)
 
   internal suspend fun loadChatImageArtifact(artifactId: String) = ensureRuntime().loadChatImageArtifact(artifactId)
 
