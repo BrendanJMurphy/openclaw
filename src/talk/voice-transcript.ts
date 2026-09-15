@@ -13,6 +13,33 @@ export function normalizeVoiceTranscriptText(text: string): string {
   return truncateUtf16Safe(text.trim(), VOICE_TRANSCRIPT_MAX_CHARS);
 }
 
+export function buildPersistedVoiceMessage(params: {
+  role: "user" | "assistant";
+  text: string;
+  timestamp: number;
+  provider: string;
+}): Record<string, unknown> {
+  const provenance = { kind: "realtime_voice", sourceChannel: "talk" };
+  if (params.role === "user") {
+    return {
+      role: "user",
+      content: [{ type: "text", text: params.text }],
+      timestamp: params.timestamp,
+      provenance,
+    };
+  }
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: params.text }],
+    api: "realtime",
+    provider: params.provider,
+    model: "realtime-voice",
+    stopReason: "stop",
+    timestamp: params.timestamp,
+    provenance,
+  };
+}
+
 export const VOICE_TRANSCRIPT_QUEUE_POLICY = {
   maxPendingCount: VOICE_TRANSCRIPT_QUEUE_MAX_PENDING,
   maxEntryChars: VOICE_TRANSCRIPT_MAX_CHARS,
@@ -26,7 +53,7 @@ export const VOICE_TRANSCRIPT_QUEUE_POLICY = {
 
 type VoiceTranscriptOperationOwner = {
   queue: BoundedSerialQueue;
-  closePromise?: Promise<void>;
+  close?: { promise: Promise<boolean>; conditional: boolean };
 };
 
 class VoiceTranscriptOperationRegistry {
@@ -49,7 +76,7 @@ class VoiceTranscriptOperationRegistry {
   private cleanup(key: string, owner: VoiceTranscriptOperationOwner): void {
     if (
       this.owners.get(key) === owner &&
-      !owner.closePromise &&
+      !owner.close &&
       owner.queue.isIdle &&
       !owner.queue.didOverflow
     ) {
@@ -64,12 +91,12 @@ class VoiceTranscriptOperationRegistry {
   ): Promise<T> {
     while (true) {
       const owner = this.getOrCreate(key);
-      if (owner.closePromise) {
+      if (owner.close) {
         if (options.waitForCapacity !== true) {
           throw new Error("voice transcript persistence session is closing");
         }
         try {
-          await owner.closePromise;
+          await owner.close.promise;
         } catch {
           // Control work retries on a fresh owner after a failed close releases this one.
         }
@@ -103,17 +130,31 @@ class VoiceTranscriptOperationRegistry {
     }
   }
 
-  async close(key: string, operation: () => Promise<void>): Promise<void> {
+  async close(
+    key: string,
+    operation: () => Promise<boolean>,
+    conditional = false,
+  ): Promise<boolean> {
     const owner = this.getOrCreate(key);
-    if (!owner.closePromise) {
+    if (!owner.close) {
       // Seal synchronously so no transcript can enter behind the close barrier.
       owner.queue.seal();
-      owner.closePromise = owner.queue.flush({ requireSuccess: true }).then(operation);
+      owner.close = {
+        conditional,
+        promise: owner.queue.flush({ requireSuccess: true }).then(operation),
+      };
+    } else if (owner.close.conditional && !conditional) {
+      // An explicit hangup retains this fence while recovery decides whether to skip.
+      owner.close = {
+        conditional: false,
+        promise: owner.close.promise.then((closed) => (closed ? true : operation())),
+      };
     }
+    const close = owner.close;
     try {
-      await owner.closePromise;
+      return await close.promise;
     } finally {
-      if (this.owners.get(key) === owner) {
+      if (this.owners.get(key) === owner && owner.close === close) {
         this.owners.delete(key);
       }
     }
