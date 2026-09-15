@@ -251,25 +251,25 @@ describe("exact-run announcement results", () => {
     expect(terminalReply).toEqual({ disposition: "visible", text: `${text.slice(0, 4_095)}…` });
   });
 
-  it("rejects a registered archive without the exact run", async () => {
+  it("marks retained evidence when the registered archive lacks the exact run", async () => {
     const child = completedChild("bounded producer evidence");
     installTranscript([], [assistant("replacement-run", "unrelated archive answer")]);
 
-    await expect(readSubagentRunAnnounceResult(child)).rejects.toThrow(
-      "final answer is unavailable in its transcript",
-    );
+    await expect(readSubagentRunAnnounceResult(child)).resolves.toMatchObject({
+      text: "[truncated-by-retention: complete child answer unavailable]\nbounded producer evidence",
+    });
   });
 
-  it("rejects missing exact-run output instead of substituting another run or the snapshot", async () => {
+  it("marks retained evidence without substituting another run", async () => {
     const child = completedChild("capped producer evidence");
     installTranscript([
       assistant("previous-run", "older result"),
       assistant("replacement-run", "newer result"),
     ]);
 
-    await expect(readSubagentRunAnnounceResult(child)).rejects.toThrow(
-      "final answer is unavailable in its transcript",
-    );
+    await expect(readSubagentRunAnnounceResult(child)).resolves.toMatchObject({
+      text: "[truncated-by-retention: complete child answer unavailable]\ncapped producer evidence",
+    });
   });
 
   it("reads the exact run from a normal spawned child's active session", async () => {
@@ -307,13 +307,13 @@ describe("exact-run announcement results", () => {
     await expect(readSubagentRunAnnounceResult(child)).resolves.toMatchObject({ text });
   });
 
-  it("rejects an unavailable normal child's result without substituting bounded evidence", async () => {
+  it("marks retained evidence when a normal child's exact result is unavailable", async () => {
     const child = completedChild("bounded producer evidence");
     child.execution.transcriptTarget = undefined;
     installTranscript([], undefined, true);
 
-    await expect(readSubagentRunAnnounceResult(child)).rejects.toThrow(
-      "final answer is unavailable in its transcript",
-    );
+    await expect(readSubagentRunAnnounceResult(child)).resolves.toMatchObject({
+      text: "[truncated-by-retention: complete child answer unavailable]\nbounded producer evidence",
+    });
   });
 });

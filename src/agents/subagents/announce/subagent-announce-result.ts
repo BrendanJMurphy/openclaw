@@ -109,7 +109,10 @@ export async function readSubagentRunAnnounceResultUsing(
   }
   const answer = isRecord(event) ? extractStoredAssistantText(event.message) : undefined;
   if (!answer) {
-    throw new Error("The completed child run's final answer is unavailable in its transcript.");
+    return {
+      text: `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
+      isCurrent,
+    };
   }
   return { text: answer, isCurrent };
 }
