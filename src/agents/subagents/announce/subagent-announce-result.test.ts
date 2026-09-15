@@ -58,8 +58,8 @@ describe("exact-run announcement results", () => {
           sessionId: deletedSession ? undefined : "completed-session",
           sessionKey: "agent:main:subagent:completed",
         });
-        const event = archiveEvents?.findLast((event) =>
-          isVisibleSubagentResultEventForRun(event, runId),
+        const event = archiveEvents?.findLast((candidate) =>
+          isVisibleSubagentResultEventForRun(candidate, runId),
         );
         return event === undefined ? undefined : { event };
       },

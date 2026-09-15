@@ -105,10 +105,18 @@ describe("agent steering queue", () => {
         readResult: prepare,
       });
       expect(prepare).toHaveBeenCalledOnce();
-      if (change === "generation") entry.generation = 2;
-      if (change === "replacement") runs.set(entry.runId, makeRun());
-      if (change === "delivery") entry.delivery = { status: "discarded" };
-      if (change === "source") current = false;
+      if (change === "generation") {
+        entry.generation = 2;
+      }
+      if (change === "replacement") {
+        runs.set(entry.runId, makeRun());
+      }
+      if (change === "delivery") {
+        entry.delivery = { status: "discarded" };
+      }
+      if (change === "source") {
+        current = false;
+      }
       finish();
       await expect(leasing).rejects.toThrow("changed while preparing");
       expect(runs.get(entry.runId)?.delivery?.steeringLeaseId).toBeUndefined();

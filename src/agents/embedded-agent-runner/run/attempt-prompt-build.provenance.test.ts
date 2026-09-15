@@ -221,6 +221,9 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
   });
   for (const [index, child] of children.entries()) {
     const answer = answers[index];
+    if (answer === undefined) {
+      throw new Error("expected a transcript answer for each child");
+    }
     await controller.completeSubagentRun({
       runId: child.runId,
       endedAt: 3_000 + index,
@@ -237,6 +240,9 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     ]);
   }
   const [first, second] = children;
+  if (!first || !second) {
+    throw new Error("expected two completed children for requester queue delivery");
+  }
   expect(first.completion?.resultText).toHaveLength(4_096);
   const storedCompletion = structuredClone(first.completion);
   announceTesting.setDepsForTest({
