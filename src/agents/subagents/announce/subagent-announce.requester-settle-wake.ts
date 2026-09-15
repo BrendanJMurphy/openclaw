@@ -462,7 +462,6 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     return false;
   }
   const preparedFindings = await readChildCompletionFindings(completionRows);
-  const findings = preparedFindings.text;
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
   // The scheduling row need not be the rerouted child. Keep every current
@@ -485,7 +484,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       : routeNotices;
   const completionChannel = normalizeMessageChannel(directOrigin?.channel);
   const wakeMessage = buildRequesterSettleWakeMessage({
-    findings,
+    findings: preparedFindings.text,
     requireVisibleReply: requesterYieldedAfterDelivery,
     parentOnly,
     modelRouteChange,
@@ -499,8 +498,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   ]
     .filter(Boolean)
     .join(":");
-  const activeBatchIsClosed = activeRequesterSettleWakeBatches.get(wakeKeyBase);
-  if (activeBatchIsClosed && !activeBatchIsClosed()) {
+  if (activeRequesterSettleWakeBatches.get(wakeKeyBase)?.() === false) {
     return false;
   }
   // A matching key or fresh row cannot supersede live or unproven authority.
@@ -592,18 +590,18 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       );
     };
     const isBatchCurrent = () => {
-      const currentRuns = listSubagentRunsForRequester(requesterSessionKey, { requesterAgentId });
-      return (
-        filterCurrentDirectChildCompletionRows(settledBatch, {
+      const currentRuns = filterCurrentDirectChildCompletionRows(
+        listSubagentRunsForRequester(requesterSessionKey, { requesterAgentId }),
+        {
           requesterSessionKey,
           requesterAgentId,
           getLatestSubagentRunByChildSessionKey,
-        }).length === settledBatch.length &&
-        settledBatch.every(
-          (entry) =>
-            currentRuns.includes(entry) &&
-            entry.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
-        )
+        },
+      );
+      return settledBatch.every(
+        (entry) =>
+          currentRuns.includes(entry) &&
+          entry.requesterSettleWake?.rearmGeneration === currentRearmGeneration,
       );
     };
     const isSourceSessionEffectsAllowed = () =>

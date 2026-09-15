@@ -1,4 +1,5 @@
 export * from "./subagent-announce-output.js";
+export { buildChildCompletionFindings } from "./subagent-announce-result.js";
 
 type OutputRuntime = typeof import("./subagent-announce.runtime.js");
 type OutputDeps = Pick<

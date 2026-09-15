@@ -5,7 +5,6 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
  *
  * Reads child session output, detects waiting states, and formats completion findings for announcements.
  */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { readSessionArchiveContentSync } from "../../../config/sessions/archive-compression.js";
 import {
@@ -21,14 +20,8 @@ import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.j
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
-import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
-import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
-import {
-  SUBAGENT_ENDED_REASON_KILLED,
-  type SubagentLifecycleEndedReason,
-} from "../registry/subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
@@ -37,7 +30,9 @@ import {
   readLatestSubagentOutputWithRetryUsing,
 } from "./subagent-announce-capture.js";
 import {
+  buildChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
+  type ChildCompletionRow,
   type PreparedAnnounceResult,
   type SubagentAnnounceResultDeps,
 } from "./subagent-announce-result.js";
@@ -52,7 +47,6 @@ import {
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
 const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "tool_use",
@@ -444,124 +438,6 @@ export async function readChildCompletionFindings(
     ),
     isCurrent,
   };
-}
-
-function describeSubagentOutcome(child: ChildCompletionRow): string {
-  const outcome = child.execution.outcome;
-  if (child.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
-    const error = outcome?.error?.trim();
-    return error ? `cancelled: ${error}` : "cancelled";
-  }
-  if (!outcome) {
-    return "unknown";
-  }
-  if (outcome.status === "ok") {
-    return "ok";
-  }
-  if (outcome.status === "timeout" || outcome.status === "error") {
-    const error = outcome.error?.trim();
-    return error ? `${outcome.status}: ${error}` : outcome.status;
-  }
-  return "unknown";
-}
-
-function formatChildResultData(resultText?: string | null): string {
-  return (
-    wrapPromptDataBlock({
-      label: "Child result",
-      text: resultText?.trim() || "(no output)",
-    }) || "Child result: (no output)"
-  );
-}
-
-function truncateChildCompletionField(value: string): string {
-  return value.length > MAX_CHILD_COMPLETION_FIELD_CHARS
-    ? `${truncateUtf16Safe(value, MAX_CHILD_COMPLETION_FIELD_CHARS - 1)}…`
-    : value;
-}
-
-type ChildCompletionExecution = { endedAt?: number; outcome?: SubagentRunOutcome };
-
-type ChildCompletionRow = {
-  announceResult?: string;
-  childSessionKey: string;
-  task: string;
-  taskName?: string;
-  label?: string;
-  createdAt: number;
-  execution: ChildCompletionExecution;
-  endedReason?: SubagentLifecycleEndedReason;
-  completion?: Parameters<typeof resolveSubagentCompletionResultText>[0]["completion"];
-};
-
-function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
-  return Boolean(
-    child.completion?.terminalReply ||
-    child.completion?.resultText?.trim() ||
-    child.completion?.fallbackResultText?.trim(),
-  );
-}
-
-export function buildChildCompletionFindings(
-  children: Array<ChildCompletionRow>,
-): string | undefined {
-  const sorted = [...children].toSorted((a, b) => {
-    if (a.createdAt !== b.createdAt) {
-      return a.createdAt - b.createdAt;
-    }
-    const aEnded =
-      typeof a.execution.endedAt === "number" ? a.execution.endedAt : Number.MAX_SAFE_INTEGER;
-    const bEnded =
-      typeof b.execution.endedAt === "number" ? b.execution.endedAt : Number.MAX_SAFE_INTEGER;
-    if (aEnded !== bEnded) {
-      return aEnded - bEnded;
-    }
-    // Parallel children commonly share millisecond timestamps; their stable
-    // session identity keeps parent-visible findings and prompt bytes ordered.
-    return a.childSessionKey < b.childSessionKey
-      ? -1
-      : a.childSessionKey > b.childSessionKey
-        ? 1
-        : 0;
-  });
-
-  const sections: string[] = [];
-  for (const [index, child] of sorted.entries()) {
-    const resultText = child.announceResult ?? resolveSubagentCompletionResultText(child);
-    const outcome = describeSubagentOutcome(child);
-    if (
-      child.execution.outcome?.status === "ok" &&
-      !resultText &&
-      hasCapturedChildCompletionReply(child)
-    ) {
-      continue;
-    }
-    const title =
-      child.taskName?.trim() ||
-      child.label?.trim() ||
-      child.task.trim() ||
-      child.childSessionKey.trim() ||
-      `child ${index + 1}`;
-    const displayIndex = sections.length + 1;
-    sections.push(
-      [
-        wrapPromptDataBlock({
-          label: `${displayIndex}. Child task`,
-          text: title,
-          maxEscapedChars: MAX_CHILD_COMPLETION_FIELD_CHARS,
-          truncationMarker: "…",
-        }),
-        `status: ${truncateChildCompletionField(outcome)}`,
-        formatChildResultData(resultText),
-      ].join("\n"),
-    );
-  }
-
-  if (sections.length === 0) {
-    return undefined;
-  }
-
-  return ["Child completion results:", "", ...sections].join("\n\n");
 }
 
 export function dedupeLatestChildCompletionRows<

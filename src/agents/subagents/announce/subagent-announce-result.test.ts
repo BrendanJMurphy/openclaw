@@ -32,6 +32,7 @@ describe("exact-run announcement results", () => {
         },
       },
       completion: {
+        required: true,
         terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text }),
       },
     };
@@ -132,7 +133,11 @@ describe("exact-run announcement results", () => {
     "keeps %s producer evidence authoritative over retained transcript text",
     async (disposition) => {
       const child = completedChild("old result");
-      child.completion = { terminalReply: { disposition }, fallbackResultText: "stale fallback" };
+      child.completion = {
+        required: true,
+        terminalReply: { disposition },
+        fallbackResultText: "stale fallback",
+      };
       const findTranscriptEvent = installTranscript([assistant(child.runId, "old result")]);
 
       await expect(readSubagentRunAnnounceResult(child)).resolves.toMatchObject({
@@ -168,8 +173,8 @@ describe("exact-run announcement results", () => {
     "rejects a %s that arrives while the exact transcript read is pending",
     async (change) => {
       const child = completedChild("original answer");
-      const started = createDeferred<void>();
-      const release = createDeferred<void>();
+      const started = createDeferred();
+      const release = createDeferred();
       const findTranscriptEvent = vi.fn<FindTranscriptEvent>(async (_scope, match) => {
         started.resolve();
         await release.promise;
@@ -183,7 +188,7 @@ describe("exact-run announcement results", () => {
       );
       await started.promise;
       if (change === "silent replacement") {
-        child.completion = { terminalReply: { disposition: "silent" } };
+        child.completion = { required: true, terminalReply: { disposition: "silent" } };
       } else {
         child.execution.outcome = { status: "error", error: "cancelled" };
       }
@@ -203,8 +208,8 @@ describe("exact-run announcement results", () => {
         ...second.execution.transcriptTarget,
         sessionId: "second-session",
       };
-      const secondStarted = createDeferred<void>();
-      const releaseSecond = createDeferred<void>();
+      const secondStarted = createDeferred();
+      const releaseSecond = createDeferred();
       const findTranscriptEvent = vi.fn<FindTranscriptEvent>(async (scope, match) => {
         const child = scope.sessionId === "second-session" ? second : first;
         if (child === second) {
@@ -223,7 +228,7 @@ describe("exact-run announcement results", () => {
         const rejected = expect(result).rejects.toThrow(
           "A child result changed while preparing the completion batch",
         );
-        first.completion = { terminalReply: { disposition: "silent" } };
+        first.completion = { required: true, terminalReply: { disposition: "silent" } };
         releaseSecond.resolve();
         await rejected;
       } else {
@@ -231,7 +236,7 @@ describe("exact-run announcement results", () => {
         const prepared = await result;
         expect(prepared.isCurrent()).toBe(true);
         expect(prepared.text).toContain("first answer");
-        first.completion = { terminalReply: { disposition: "silent" } };
+        first.completion = { required: true, terminalReply: { disposition: "silent" } };
         expect(prepared.isCurrent()).toBe(false);
       }
     },
