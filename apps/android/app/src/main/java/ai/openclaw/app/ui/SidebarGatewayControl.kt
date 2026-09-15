@@ -101,7 +101,9 @@ internal fun SidebarGatewayControl(
         .heightIn(min = 56.dp)
         .testTag("sidebar-gateway-control")
         .clickable(role = Role.Button) {
-          if (entries.size <= 1) {
+          if (entries.isEmpty()) {
+            viewModel.openGatewayAddition()
+          } else if (entries.size == 1) {
             openSettings()
           } else if (opening == null) {
             var next: FoldAwareSheetState? = null
@@ -147,6 +149,7 @@ internal fun SidebarGatewayControl(
             viewModel.switchGatewayFromSidebar(stableId)
           }
         },
+        onAdd = { if (geometry.refresh()) viewModel.openGatewayAddition() },
         openSettings = {
           if (geometry.refresh()) {
             dismiss()
@@ -178,6 +181,7 @@ private fun GatewayPickerSheet(
   selectionEnabled: Boolean,
   onDismiss: () -> Unit,
   onSelect: (String) -> Unit,
+  onAdd: () -> Unit,
   openSettings: () -> Unit,
 ) {
   var query by rememberSaveable { mutableStateOf("") }
@@ -240,7 +244,7 @@ private fun GatewayPickerSheet(
                     Text(nativeString("Gateways"), style = ClawTheme.type.title)
                     Text(savedGatewayCount(entries.size), style = ClawTheme.type.caption, color = palette.muted)
                   }
-                  TextButton(onClick = openSettings, colors = ButtonDefaults.textButtonColors(contentColor = palette.text)) {
+                  TextButton(onClick = onAdd, colors = ButtonDefaults.textButtonColors(contentColor = palette.text)) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text(nativeString("Add Gateway"), modifier = Modifier.padding(start = 4.dp))
                   }

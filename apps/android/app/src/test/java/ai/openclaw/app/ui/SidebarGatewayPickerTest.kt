@@ -54,12 +54,16 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isSelectable
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -77,6 +81,7 @@ import androidx.lifecycle.ViewModelStore
 import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowInfoTrackerDecorator
 import androidx.window.layout.WindowLayoutInfo
+import com.google.mlkit.common.sdkinternal.MlKitContext
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
@@ -87,6 +92,7 @@ import okhttp3.mockwebserver.QueueDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -101,6 +107,7 @@ import org.robolectric.shadows.ShadowToast
 import org.robolectric.util.ReflectionHelpers
 import java.io.File
 import java.net.InetAddress
+import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -152,6 +159,159 @@ class SidebarGatewayPickerTest {
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, animatorScale)
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
     WindowInfoTracker.reset()
+  }
+
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun addGatewayStartsScannerAndBackPreservesTheConversation() {
+    val alpha = savedGateway("Gateway Alpha")
+    savedGateway("Gateway Beta")
+    focus(alpha)
+    showSidebarAndComposer(showShell = true)
+    // Enter through the live composer after its owner is ready, not a pre-render alias.
+    composeRule.onNode(hasSetTextAction()).assertIsEnabled().performTextReplacement("Keep this draft")
+    val owner = composeRule.runOnIdle { model.captureChatShareOwner() }
+    val attachment = PendingAttachment("kept-file", "keep.txt", "text/plain", "QQ==")
+    composeRule.runOnIdle {
+      assertEquals("Keep this draft", model.chatComposerState.textDrafts[owner])
+      model.chatComposerState.addAttachments(owner, listOf(attachment))
+    }
+    val saved = prefs.gatewayRegistry.entries.value
+    composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
+    openPicker()
+    composeRule.onNodeWithText("Add Gateway").performClick()
+    capture("add-gateway-entry", preferredDialogTag = "gateway-addition")
+    composeRule.onNodeWithTag("gateway-addition").assertIsDisplayed()
+    composeRule.runOnIdle {
+      assertTrue(prefs.onboardingCompleted.value)
+      assertEquals(alpha.stableId, runtime.gatewayConnectionHandoff.value.focusedStableId)
+      assertEquals(saved, prefs.gatewayRegistry.entries.value)
+      assertEquals("Keep this draft", model.chatComposerState.textDrafts[owner])
+      assertEquals(listOf(attachment), model.chatComposerState.attachments.value[owner])
+    }
+    composeRule.runOnUiThread {
+      (ShadowDialog.getLatestDialog() as ComponentDialog).onBackPressedDispatcher.onBackPressed()
+    }
+    composeRule.onNodeWithTag("gateway-addition").assertDoesNotExist()
+    composeRule.onNodeWithText("Manage Gateways").assertIsDisplayed()
+    composeRule.runOnIdle {
+      assertTrue(prefs.onboardingCompleted.value)
+      assertEquals(alpha.stableId, runtime.gatewayConnectionHandoff.value.focusedStableId)
+      assertEquals(saved, prefs.gatewayRegistry.entries.value)
+      assertEquals("Keep this draft", model.chatComposerState.textDrafts[owner])
+      assertEquals(listOf(attachment), model.chatComposerState.attachments.value[owner])
+    }
+    capture("add-gateway-cancelled", popup = true)
+  }
+
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun setupCodeWaitsForConfirmationAndPreservesPreviousOwners() {
+    val alpha = savedGateway("Gateway Alpha")
+    savedGateway("Gateway Beta")
+    focus(alpha)
+    val before = prefs.gatewayRegistry.entries.value
+    val server =
+      MockWebServer().apply {
+        (dispatcher as QueueDispatcher).setFailFast(MockResponse().setResponseCode(503))
+        start(InetAddress.getByName("127.0.0.1"), 0)
+      }
+    servers += server
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port, false)
+    val code =
+      Base64.getUrlEncoder().withoutPadding().encodeToString(
+        kotlinx.serialization.json
+          .JsonObject(
+            mapOf(
+              "url" to kotlinx.serialization.json.JsonPrimitive("http://127.0.0.1:" + server.port),
+              "token" to kotlinx.serialization.json.JsonPrimitive("fixture-add-token"),
+            ),
+          ).toString()
+          .toByteArray(),
+      )
+    showSidebarAndComposer(showShell = true)
+    composeRule.onNode(hasSetTextAction()).assertIsEnabled().performTextReplacement("Unsent on Alpha")
+    val owner = composeRule.runOnIdle { model.captureChatShareOwner() }
+    val attachment = PendingAttachment("preserved-file", "keep.txt", "text/plain", "QQ==")
+    composeRule.runOnIdle {
+      assertEquals("Unsent on Alpha", model.chatComposerState.textDrafts[owner])
+      model.chatComposerState.addAttachments(owner, listOf(attachment))
+    }
+    composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
+    openPicker()
+    composeRule.onNodeWithText("Add Gateway").performClick()
+    composeRule.onNodeWithText("Enter setup code").performScrollTo().performClick()
+    composeRule.onNodeWithTag("gateway-add-code").performTextReplacement("not a setup code")
+    composeRule.onNodeWithText("Continue").performScrollTo().performClick()
+    composeRule.onNodeWithTag("gateway-add-preview").assertDoesNotExist()
+    composeRule.runOnIdle { assertEquals(before, prefs.gatewayRegistry.entries.value) }
+    composeRule.onNodeWithTag("gateway-add-code").performTextReplacement(code)
+    composeRule.onNodeWithText("Continue").performScrollTo().performClick()
+    composeRule.onNodeWithTag("gateway-add-preview").assertIsDisplayed()
+    capture("add-gateway-confirmation", preferredDialogTag = "gateway-addition")
+    composeRule.runOnIdle {
+      assertEquals(alpha.stableId, runtime.gatewayConnectionHandoff.value.focusedStableId)
+      assertEquals(before, prefs.gatewayRegistry.entries.value)
+      assertEquals("captured=" + owner + " live=" + model.captureChatShareOwner() + " drafts=" + model.chatComposerState.textDrafts.snapshot(), "Unsent on Alpha", model.chatComposerState.textDrafts[owner])
+    }
+    composeRule.onNodeWithText("Cancel").performScrollTo().performClick()
+    composeRule.onNodeWithTag("gateway-addition").assertDoesNotExist()
+    composeRule.runOnIdle { assertEquals(before, prefs.gatewayRegistry.entries.value) }
+    composeRule.onNodeWithText("Add Gateway").performClick()
+    composeRule.onNodeWithText("Enter setup code").performScrollTo().performClick()
+    composeRule.onNodeWithTag("gateway-add-code").performTextReplacement(code)
+    composeRule.onNodeWithText("Continue").performScrollTo().performClick()
+    composeRule.onNodeWithTag("gateway-add-connect").performScrollTo().performClick()
+    composeRule.waitUntil {
+      runtime.gatewayConnectionHandoff.value.let { !it.pending && it.focusedStableId == endpoint.stableId }
+    }
+    composeRule.onNodeWithTag("gateway-addition").assertDoesNotExist()
+    composeRule.runOnIdle {
+      assertTrue(prefs.onboardingCompleted.value)
+      assertEquals(before.size + 1, prefs.gatewayRegistry.entries.value.size)
+      assertEquals("Unsent on Alpha", model.chatComposerState.textDrafts[owner])
+      assertEquals(listOf(attachment), model.chatComposerState.attachments.value[owner])
+    }
+  }
+
+  @Test
+  fun staleAdditionCannotConnectOrDismissANewerRequest() {
+    val alpha = savedGateway("Gateway Alpha")
+    focus(alpha)
+    showSidebarAndComposer(showComposer = false)
+    model.openGatewayAddition()
+    val stale = requireNotNull(model.gatewayAdditionRequest.value)
+    model.dismissGatewayAddition(stale)
+    model.openGatewayAddition()
+    val current = requireNotNull(model.gatewayAdditionRequest.value)
+    val plan = GatewayConnectPlan(GatewayConnectConfig("127.0.0.1", 19876, false, "", "fixture-token", ""), GatewaySavedAuthAction.REPLACE_SETUP)
+    model.dismissGatewayAddition(stale)
+    model.saveGatewayConfigAndConnect(plan, stale)
+    assertTrue(model.gatewayAdditionRequest.value === current)
+    assertEquals(alpha.stableId, runtime.gatewayConnectionHandoff.value.focusedStableId)
+    assertFalse(runtime.gatewayConnectionHandoff.value.pending)
+    assertEquals(1, prefs.gatewayRegistry.entries.value.size)
+    model.dismissGatewayAddition(current)
+  }
+
+  @Test
+  fun addingASavedGatewayDoesNotReplaceCredentialsOrDrafts() {
+    val alpha = savedGateway("Gateway Alpha")
+    val beta = savedGateway("Gateway Beta")
+    prefs.saveGatewayCredentials(beta.stableId, token = "fixture-original-token")
+    focus(alpha)
+    val owner = model.captureChatShareOwner()
+    model.chatComposerState.textDrafts[owner] = "Keep Alpha"
+    showSidebarAndComposer(showComposer = false)
+    model.openGatewayAddition()
+    val request = requireNotNull(model.gatewayAdditionRequest.value)
+    val config = GatewayConnectConfig(requireNotNull(beta.host), requireNotNull(beta.port), false, "", "fixture-replacement-token", "")
+    composeRule.runOnIdle { model.saveGatewayConfigAndConnect(GatewayConnectPlan(config, GatewaySavedAuthAction.REPLACE_SETUP), request) }
+    awaitFocus(beta)
+    assertNull(model.gatewayAdditionRequest.value)
+    assertEquals("fixture-original-token", prefs.loadGatewayCredentials(beta.stableId).token)
+    assertEquals("Keep Alpha", model.chatComposerState.textDrafts[owner])
+    assertEquals(2, prefs.gatewayRegistry.entries.value.size)
   }
 
   @Test
@@ -303,14 +463,16 @@ class SidebarGatewayPickerTest {
   }
 
   @Test
-  fun emptyRegistryOffersExistingGatewaySetup() {
+  fun emptyRegistryOffersCancellableGatewayAddition() {
     prefs.gatewayRegistry.entries.value
       .forEach { prefs.gatewayRegistry.remove(it.stableId) }
     showSidebarAndComposer()
     capture("empty-registry")
     composeRule.onNodeWithText("Add Gateway").assertIsDisplayed().performClick()
     composeRule.runOnIdle {
-      org.junit.Assert.assertEquals(SettingsRoute.Gateway, model.requestedSettingsRoute.value)
+      assertNull(model.requestedSettingsRoute.value)
+      assertTrue(model.gatewayAdditionRequest.value != null)
+      assertTrue(prefs.onboardingCompleted.value)
     }
   }
 
@@ -707,7 +869,9 @@ class SidebarGatewayPickerTest {
     dark: Boolean = true,
     fontScale: Float = 1f,
     showComposer: Boolean = true,
+    showShell: Boolean = false,
   ) {
+    if (showShell) MlKitContext.initializeIfNeeded(app)
     themeMode.value = if (dark) AppearanceThemeMode.Dark else AppearanceThemeMode.Light
     restoration.setContent {
       if (mounted.value) {
@@ -719,6 +883,10 @@ class SidebarGatewayPickerTest {
         CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale), LocalAbsoluteTonalElevation provides tonalElevation.value) {
           OpenClawTheme(themeMode = themeMode.value) {
             ClawDesignTheme(dark = LocalResolvedAppearanceIsDark.current, family = themeFamily.value, accentArgb = accentArgb.value) {
+              if (showShell) {
+                Box(Modifier.fillMaxSize().testTag("gateway-proof")) { ShellScreen(viewModel = model) }
+                return@ClawDesignTheme
+              }
               Row(Modifier.fillMaxSize().testTag("gateway-proof")) {
                 Box(Modifier.width(300.dp)) {
                   OpenClawSidebar(
@@ -766,12 +934,18 @@ class SidebarGatewayPickerTest {
   private fun capture(
     name: String,
     popup: Boolean = false,
+    preferredDialogTag: String? = null,
   ) {
     val directory = System.getenv("OPENCLAW_GATEWAY_PROOF_DIR") ?: return
     val target = File(directory, "$name.png")
     requireNotNull(target.parentFile).mkdirs()
     target.outputStream().use { output ->
-      val node = if (popup) composeRule.onNode(isDialog()) else composeRule.onNodeWithTag("gateway-proof")
+      val node =
+        when {
+          preferredDialogTag != null && composeRule.onAllNodesWithTag(preferredDialogTag).fetchSemanticsNodes().isNotEmpty() -> composeRule.onNode(isDialog() and hasAnyDescendant(hasTestTag(preferredDialogTag)))
+          popup -> composeRule.onNode(isDialog())
+          else -> composeRule.onNodeWithTag("gateway-proof")
+        }
       node.captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, output)
     }
   }
