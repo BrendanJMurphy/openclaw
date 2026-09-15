@@ -315,7 +315,10 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   };
 
   const scheduleForceKillWaitFallback = (signal: NodeJS.Signals) => {
-    clearForceKillWaitFallback();
+    // Repeated hard cancellation must not postpone the owner's terminal result.
+    if (forceKillWaitFallbackTimer || waitSettled) {
+      return;
+    }
     // Some Windows child processes never emit `close` after a hard kill.
     forceKillWaitFallbackTimer = setTimeout(() => {
       cleanup.reject(new Error("child cleanup could not be confirmed before the kill deadline"));
