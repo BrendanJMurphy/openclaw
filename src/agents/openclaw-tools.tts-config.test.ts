@@ -408,7 +408,9 @@ describe("createOpenClawTools media generation session wiring", () => {
       const tool = tools.find((candidate) => candidate.name === name);
       expect(tool).toBeDefined();
       await tool?.execute("media-start", {});
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(onYield).not.toHaveBeenCalled();
     },
   );
