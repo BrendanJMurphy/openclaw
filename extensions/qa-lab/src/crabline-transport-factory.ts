@@ -1,6 +1,6 @@
 // Qa Lab plugin module registers Crabline through the shared QA transport factory contract.
 import type { QaBusState } from "./bus-state.js";
-import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
+import type { QaTransportAdapterFactory } from "./qa-transport-factory.js";
 
 export function createQaCrablineTransportAdapterFactory(
   state?: QaBusState,

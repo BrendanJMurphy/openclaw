@@ -10,9 +10,15 @@ import {
   createQaChannelTransport,
   QA_CHANNEL_DEFAULT_SUITE_CONCURRENCY,
 } from "./qa-channel-transport.js";
+import type {
+  QaTransportAdapterFactory,
+  QaTransportFactoryMatchContext,
+} from "./qa-transport-factory.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { createQaStateBackedTransportAdapter } from "./qa-transport.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
+
+export type { QaTransportAdapterFactory } from "./qa-transport-factory.js";
 
 export type QaTransportId = "qa-channel";
 export type QaTransportDriver = QaTransportId | "crabline" | "live";
@@ -34,13 +40,6 @@ export type QaTransportAdapterFactoryResult<
   cleanupBeforeGatewayStop: () => Promise<void>;
   cleanupAfterGatewayStop: () => Promise<void>;
   cleanupWithoutGateway: () => Promise<void>;
-};
-
-type QaTransportFactoryMatchContext = Pick<QaTransportFactoryContext, "channelId" | "driver">;
-
-export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]> & {
-  supportsModuleFlowsFor?: (context: QaTransportFactoryMatchContext) => boolean;
-  prepareSelectedScenarios?: (scenarioIds: readonly string[]) => Promise<void>;
 };
 
 const QA_CRABLINE_TRANSPORT_FACTORY_METADATA = createQaCrablineTransportAdapterFactory();
