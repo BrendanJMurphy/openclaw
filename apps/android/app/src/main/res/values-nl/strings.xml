@@ -38,6 +38,7 @@
     <string name="native_0174f83136630e7e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s accounts"</string>
     <string name="native_01ac1c298e0cbd9a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cron-wijzigingen vereisen operator.admin. Instelcodes verlenen deze toegang bewust niet. Maak opnieuw verbinding met het gedeelde token of wachtwoord van de gateway om beheerderstoegang aan te vragen. Als dit apparaat die toegang nog steeds niet heeft, keur dan de openstaande uitbreiding van toegangsrechten goed via een bestaande beheerclient."</string>
     <string name="native_01bcfe7a9296b6d6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apply Patch"</string>
+    <string name="native_01c14c9eadedae4d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s gateways"</string>
     <string name="native_01cfb797d96a35b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Knijpgebaar"</string>
     <string name="native_024f9605eda4caf4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Opeenvolgende keren overgeslagen"</string>
     <string name="native_027d7c7db6d8b3ef" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Deze map bevat nog geen bestanden."</string>
@@ -65,6 +66,7 @@
     <string name="native_0692ff7848b2cfc2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"argv JSON-array van de opdracht"</string>
     <string name="native_06ee275ccdbbf862" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kan die afbeelding niet lezen. Kies een duidelijke schermafbeelding of afbeelding van de QR-code uit openclaw qr."</string>
     <string name="native_06fcc3f73af64b5b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kon Skill Workshop-voorstel niet %1$s."</string>
+    <string name="native_07136574d470a4bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Voltooi de opname of stop dicteren of Talk voordat je van gateway wisselt."</string>
     <string name="native_071c496aa34a4fd5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Elders beantwoord"</string>
     <string name="native_0728ba404eb8f8bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway heeft eenmalige goedkeuring geregistreerd."</string>
     <string name="native_073c1634c496cdb6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"status"</string>
@@ -491,6 +493,7 @@
     <string name="native_42e3a99c21767def" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wachten op goedkeuring van het apparaat"</string>
     <string name="native_430798d3e8250938" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gesprek laden"</string>
     <string name="native_430df68ec29a85a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Deze gateway biedt nu een certificaat aan dat door dit apparaat wordt vertrouwd."</string>
+    <string name="native_432af41f893dc7e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Geen overeenkomende gateways"</string>
     <string name="native_4387e5d3966fc436" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inspanning"</string>
     <string name="native_43905968a540af6a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Spreiding ms"</string>
     <string name="native_43988c156beabf7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"event create"</string>
@@ -562,6 +565,7 @@
     <string name="native_4d419bb3db38b6dd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Altijd Toestaan"</string>
     <string name="native_4d4c7eee2e28d03c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"present"</string>
     <string name="native_4d5e590b23745b4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skills die op de gateway zijn geïnstalleerd, verschijnen hier."</string>
+    <string name="native_4da4a2f43118d878" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 gateway"</string>
     <string name="native_4dee3342f86128c1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"De code is mogelijk verlopen of voor een andere Gateway gegenereerd."</string>
     <string name="native_4e8c72cab82e0711" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Automatisering heeft een ongeldige configuratie."</string>
     <string name="native_4ec30e9d85725d41" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lijst met toegestane items"</string>
@@ -861,6 +865,7 @@
     <string name="native_7703e4288a7ca2db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Session Settings"</string>
     <string name="native_7728331d12fcfc1a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Beveiligingsmelding"</string>
     <string name="native_773e7729b237d4ea" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ander antwoord"</string>
+    <string name="native_774e93aa11fcfe25" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateways zoeken"</string>
     <string name="native_77a9c080491599ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Subagent klaar"</string>
     <string name="native_77ab6bb71f77154d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Systeemtoegang openen"</string>
     <string name="native_7804f7a79a9eee32" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Voltooid"</string>
@@ -941,6 +946,7 @@
     <string name="native_8477f18620f1ef69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Background Shell"</string>
     <string name="native_848123d14f84faa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Onbewerkt"</string>
     <string name="native_848f54e89660cea4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Uitvoeringen"</string>
+    <string name="native_849383969287566c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateways beheren"</string>
     <string name="native_849ccb784cf30af6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nu uitvoeren"</string>
     <string name="native_84a2e27466832efd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vertakking zonder titel"</string>
     <string name="native_84aebc69a1bf739a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Geconfigureerd"</string>
@@ -1438,6 +1444,7 @@
     <string name="native_cd6ab55bb453dd5f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Elke %1$su"</string>
     <string name="native_cde2cb25263fd770" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw-vertalingen · %1$s"</string>
     <string name="native_cdf742c6da3ba485" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Opdrachtverzoek"</string>
+    <string name="native_ce2058c8b7c34b29" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Voltooi de media-import of wacht tot het verzenden klaar is voordat je van gateway wisselt."</string>
     <string name="native_ce29b7f85b9eaf7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Up-to-date"</string>
     <string name="native_ce4683e7013a18cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kanaal"</string>
     <string name="native_ce58c189f2045434" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nieuwe groep…"</string>

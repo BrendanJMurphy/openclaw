@@ -38,6 +38,7 @@
     <string name="native_0174f83136630e7e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s konton"</string>
     <string name="native_01ac1c298e0cbd9a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cron-ändringar kräver operator.admin. Konfigurationskoder ger avsiktligt inte den behörigheten. Återanslut med gatewayens delade token eller lösenord för att begära administratörsbehörighet. Om enheten fortfarande saknar den, godkänn den väntande behörighetsutökningen från en befintlig administratörsklient."</string>
     <string name="native_01bcfe7a9296b6d6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apply Patch"</string>
+    <string name="native_01c14c9eadedae4d" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s gatewayer"</string>
     <string name="native_01cfb797d96a35b6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nypning"</string>
     <string name="native_024f9605eda4caf4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Överhoppningar i följd"</string>
     <string name="native_027d7c7db6d8b3ef" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Den här mappen har inga filer än."</string>
@@ -65,6 +66,7 @@
     <string name="native_0692ff7848b2cfc2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"JSON-array för kommandots argv"</string>
     <string name="native_06ee275ccdbbf862" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kunde inte läsa bilden. Välj en tydlig skärmbild eller bild av QR-koden från openclaw qr."</string>
     <string name="native_06fcc3f73af64b5b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kunde inte %1$s förslaget i Skill Workshop."</string>
+    <string name="native_07136574d470a4bb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Avsluta inspelningen eller stoppa diktering eller Talk innan du byter gateway."</string>
     <string name="native_071c496aa34a4fd5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Besvarat på annat håll"</string>
     <string name="native_0728ba404eb8f8bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway registrerade ett engångsgodkännande."</string>
     <string name="native_073c1634c496cdb6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"status"</string>
@@ -491,6 +493,7 @@
     <string name="native_42e3a99c21767def" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Väntar på enhetsgodkännande"</string>
     <string name="native_430798d3e8250938" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Läser in tråd"</string>
     <string name="native_430df68ec29a85a2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Den här gatewayen presenterar nu ett certifikat som den här enheten litar på."</string>
+    <string name="native_432af41f893dc7e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Inga matchande gatewayer"</string>
     <string name="native_4387e5d3966fc436" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ansträngning"</string>
     <string name="native_43905968a540af6a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidsförskjutning ms"</string>
     <string name="native_43988c156beabf7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"event create"</string>
@@ -562,6 +565,7 @@
     <string name="native_4d419bb3db38b6dd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tillåt alltid"</string>
     <string name="native_4d4c7eee2e28d03c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"present"</string>
     <string name="native_4d5e590b23745b4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Skills som är installerade på gatewayen visas här."</string>
+    <string name="native_4da4a2f43118d878" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 gateway"</string>
     <string name="native_4dee3342f86128c1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Koden kan ha gått ut eller ha genererats för en annan Gateway."</string>
     <string name="native_4e8c72cab82e0711" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Automatiseringen har en ogiltig konfiguration."</string>
     <string name="native_4ec30e9d85725d41" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tillåtelselista"</string>
@@ -861,6 +865,7 @@
     <string name="native_7703e4288a7ca2db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Session Settings"</string>
     <string name="native_7728331d12fcfc1a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Säkerhetsmeddelande"</string>
     <string name="native_773e7729b237d4ea" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Annat svar"</string>
+    <string name="native_774e93aa11fcfe25" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sök gatewayer"</string>
     <string name="native_77a9c080491599ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Underagent klar"</string>
     <string name="native_77ab6bb71f77154d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Öppna systemåtkomst"</string>
     <string name="native_7804f7a79a9eee32" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Slutförd"</string>
@@ -941,6 +946,7 @@
     <string name="native_8477f18620f1ef69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Background Shell"</string>
     <string name="native_848123d14f84faa2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Rå"</string>
     <string name="native_848f54e89660cea4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Körningar"</string>
+    <string name="native_849383969287566c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hantera gatewayer"</string>
     <string name="native_849ccb784cf30af6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kör Nu"</string>
     <string name="native_84a2e27466832efd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Namnlös gren"</string>
     <string name="native_84aebc69a1bf739a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Konfigurerad"</string>
@@ -1438,6 +1444,7 @@
     <string name="native_cd6ab55bb453dd5f" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Var %1$s:e timme"</string>
     <string name="native_cde2cb25263fd770" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw-översättningar · %1$s"</string>
     <string name="native_cdf742c6da3ba485" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kommandobegäran"</string>
+    <string name="native_ce2058c8b7c34b29" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Slutför medieimporten eller vänta tills sändningen är klar innan du byter gateway."</string>
     <string name="native_ce29b7f85b9eaf7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Uppdaterad"</string>
     <string name="native_ce4683e7013a18cd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kanal"</string>
     <string name="native_ce58c189f2045434" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ny grupp…"</string>
