@@ -9,6 +9,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
@@ -34,7 +35,7 @@ type SourceIndexDatabase = {
     mtime: number;
     size: number;
   };
-  memory_index_chunks: { path: string; source: MemorySource };
+  memory_index_chunks: { id: string; path: string; source: MemorySource };
 };
 
 type SourceIndexState = {
@@ -148,13 +149,24 @@ export class MemorySourceIndexKernel {
         markMemoryVectorRebuildRequired(this.database);
       } else {
         try {
-          this.database
-            .prepare(
-              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (
-               SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?
-             )`,
-            )
-            .run(pathname, source);
+          // sqlite-vec scans for IN but uses point lookups for equality. Roll back
+          // the whole delete batch before recording rebuild debt on a caught failure.
+          runSqliteImmediateTransactionSync(this.database, () => {
+            const rows = executeSqliteQuerySync(
+              this.database,
+              getNodeSqliteKysely<SourceIndexDatabase>(this.database)
+                .selectFrom("memory_index_chunks")
+                .select("id")
+                .where("path", "=", pathname)
+                .where("source", "=", source),
+            ).rows;
+            const removeVector = this.database.prepare(
+              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id = ?`,
+            );
+            for (const { id } of rows) {
+              removeVector.run(id);
+            }
+          });
         } catch {
           markMemoryVectorRebuildRequired(this.database);
         }
