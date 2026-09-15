@@ -18,6 +18,8 @@ import {
 } from "./manager-vector-rebuild-state.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
+const MAX_VECTOR_POINT_DELETES = 32;
+
 export type MemorySourceIndexReplacement = {
   entry: { path: string; hash: string; mtimeMs: number; size: number };
   chunks: IndexedMemoryChunk[];
@@ -149,8 +151,9 @@ export class MemorySourceIndexKernel {
         markMemoryVectorRebuildRequired(this.database);
       } else {
         try {
-          // sqlite-vec scans for IN but uses point lookups for equality. Roll back
-          // the whole delete batch before recording rebuild debt on a caught failure.
+          // Point lookups avoid scanning unrelated vectors for small sources;
+          // larger batches use one scan to bound native calls. Keep either path
+          // atomic before recording rebuild debt on a caught failure.
           runSqliteImmediateTransactionSync(this.database, () => {
             const rows = executeSqliteQuerySync(
               this.database,
@@ -158,8 +161,18 @@ export class MemorySourceIndexKernel {
                 .selectFrom("memory_index_chunks")
                 .select("id")
                 .where("path", "=", pathname)
-                .where("source", "=", source),
+                .where("source", "=", source)
+                .limit(MAX_VECTOR_POINT_DELETES + 1),
             ).rows;
+            if (rows.length > MAX_VECTOR_POINT_DELETES) {
+              this.database
+                .prepare(
+                  `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (` +
+                    "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)",
+                )
+                .run(pathname, source);
+              return;
+            }
             const removeVector = this.database.prepare(
               `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id = ?`,
             );

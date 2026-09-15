@@ -82,7 +82,7 @@ function snapshot(db: DatabaseSync) {
 }
 
 describe("memory source index native kernel", () => {
-  it("uses native vector point lookups for replacement and source deletion", async () => {
+  it("uses native vector point lookups for sparse replacement and source deletion", async () => {
     const database = await createDatabase();
     const pathname = "memory/current.md";
     write(database, replacement(pathname, "original", 3));
@@ -140,18 +140,103 @@ describe("memory source index native kernel", () => {
     }
   });
 
+  it("removes a large source in one native vector delete while retaining siblings", async () => {
+    const database = await createDatabase();
+    const db = database.db;
+    const pathname = "memory/current.md";
+    write(database, replacement(pathname, "original", 2048));
+    write(database, replacement("memory/sibling.md"));
+    write(database, {
+      ...replacement(pathname),
+      source: "sessions",
+      agentId: "main",
+      sessionId: "sibling-session",
+    });
+    const siblings = db
+      .prepare("SELECT id FROM memory_index_chunks WHERE path != ? OR source != ? ORDER BY id")
+      .all(pathname, "memory");
+    const prepare = db.prepare.bind(db);
+    const deletes: Array<{ calls: () => number; restore: () => void }> = [];
+    const reads: Array<{ rows: () => number[]; restore: () => void }> = [];
+    const spy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (/^DELETE FROM memory_index_chunks_vec\b/.test(sql)) {
+        const run = vi.spyOn(statement, "run");
+        deletes.push({ calls: () => run.mock.calls.length, restore: () => run.mockRestore() });
+      }
+      if (/^select "id" from "memory_index_chunks"(?:\s|$)/i.test(sql)) {
+        const all = vi.spyOn(statement, "all");
+        const iterate = statement.iterate.bind(statement);
+        const iteration = vi.spyOn(statement, "iterate").mockImplementation((...params) => {
+          const iterator = iterate(...params);
+          const next = vi.spyOn(iterator, "next");
+          reads.push({
+            rows: () => [
+              next.mock.results.filter((result) => result.type === "return" && !result.value.done)
+                .length,
+            ],
+            restore: () => next.mockRestore(),
+          });
+          return iterator;
+        });
+        reads.push({
+          rows: () =>
+            all.mock.results.flatMap((result) =>
+              result.type === "return" ? [result.value.length] : [],
+            ),
+          restore: () => {
+            all.mockRestore();
+            iteration.mockRestore();
+          },
+        });
+      }
+      return statement;
+    });
+    let deleteCalls: number;
+    let selectedRows: number[];
+    try {
+      expect(
+        runSqliteImmediateTransactionSync(db, () =>
+          database.sourceIndex.deleteIfCurrent({
+            path: pathname,
+            source: "memory",
+            expectedHash: "original",
+          }),
+        ),
+      ).toBe(true);
+      deleteCalls = deletes.reduce((count, statement) => count + statement.calls(), 0);
+      selectedRows = reads.flatMap((statement) => statement.rows());
+    } finally {
+      spy.mockRestore();
+      for (const statement of [...deletes, ...reads]) {
+        statement.restore();
+      }
+    }
+    expect(db.prepare("SELECT id FROM memory_index_chunks_vec ORDER BY id").all()).toEqual(
+      siblings,
+    );
+    expect(db.prepare("SELECT id FROM memory_index_chunks ORDER BY id").all()).toEqual(siblings);
+    expect(db.prepare("SELECT id FROM memory_index_chunks_fts ORDER BY id").all()).toEqual(
+      siblings,
+    );
+    expect(deleteCalls).toBe(1);
+    expect(selectedRows).toEqual([33]);
+  });
+
   it.each([
-    { failAt: 2, rollback: false },
-    { failAt: 3, rollback: false },
-    { failAt: 2, rollback: true },
-    { failAt: 3, rollback: true },
+    { chunks: 3, failAt: 2, rollback: false },
+    { chunks: 3, failAt: 3, rollback: false },
+    { chunks: 3, failAt: 2, rollback: true },
+    { chunks: 3, failAt: 3, rollback: true },
+    { chunks: 2048, failAt: 2, rollback: false },
+    { chunks: 2048, failAt: 3, rollback: true },
   ])(
-    "rolls back partial native vector deletes at $failAt (outer rollback: $rollback)",
-    async ({ failAt, rollback }) => {
+    "rolls back partial native vector deletes at $failAt of $chunks (outer rollback: $rollback)",
+    async ({ chunks, failAt, rollback }) => {
       const database = await createDatabase();
       const db = database.db;
       const pathname = "memory/current.md";
-      write(database, replacement(pathname, "original", 3));
+      write(database, replacement(pathname, "original", chunks));
       write(database, replacement("memory/sibling.md"));
       const readVectors = () =>
         db
@@ -205,7 +290,7 @@ describe("memory source index native kernel", () => {
         db
           .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
           .get(pathname),
-      ).toEqual({ count: rollback ? 3 : 0 });
+      ).toEqual({ count: rollback ? chunks : 0 });
       expect(db.prepare("SELECT path FROM memory_index_sources ORDER BY path").all()).toEqual(
         rollback
           ? [{ path: pathname }, { path: "memory/sibling.md" }]
