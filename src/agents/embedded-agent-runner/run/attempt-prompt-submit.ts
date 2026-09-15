@@ -100,8 +100,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
+  let pendingSteering = input.leasedSteering;
   const assertSteeringCurrent = () => {
-    if (input.leasedSteering && !input.leasedSteering.isCurrent()) {
+    if (pendingSteering && !pendingSteering.isCurrent()) {
       throw new Error(
         "The queued child results lost authority before requester prompt submission.",
       );
@@ -120,7 +121,12 @@ export async function submitEmbeddedAttemptPrompt(input: {
       await input.persistToolResultProjections();
       options?.signal?.throwIfAborted();
       assertSteeringCurrent();
-      return baseStreamFn(model, context, options);
+      const stream = await baseStreamFn(model, context, options);
+      // Pre-prompt compaction has not consumed the deferred answer.
+      if (captureCurrentPromptForModel) {
+        pendingSteering = undefined;
+      }
+      return stream;
     };
     const providerPromptStreamFn = wrapStreamFnWithMessageTransform(
       persistThenStream,
