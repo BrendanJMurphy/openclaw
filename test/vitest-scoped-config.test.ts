@@ -629,9 +629,14 @@ describe("scoped vitest configs", () => {
     expectForkedIsolatedRunner(defaultCliProcessConfig);
   });
 
-  it("keeps process-launching CLI files out of the shared CLI graph", () => {
+  it("keeps process-launching and database-worker CLI files out of the shared CLI graph", () => {
+    const databaseCliFiles = databaseWorkerCoreTestFiles.filter((file) =>
+      file.startsWith("src/cli/"),
+    );
     expect(requireTestConfig(defaultCliConfig).exclude).toEqual(
-      expect.arrayContaining(cliProcessTestFiles.map((file) => file.replace("src/cli/", ""))),
+      expect.arrayContaining(
+        [...cliProcessTestFiles, ...databaseCliFiles].map((file) => file.replace("src/cli/", "")),
+      ),
     );
     const processTestConfig = requireTestConfig(defaultCliProcessConfig);
     expect(processTestConfig.include).toContain("src/cli/update-dry-run-state.process.test.ts");
