@@ -378,13 +378,15 @@ describe("agent steering queue", () => {
     }
   });
 
-  it("bounds escaped result expansion with a visible marker", () => {
-    const fullResult = `${"<".repeat(6_000)}-unbounded-tail`;
+  it("leases a complete oversized result and leaves the next completion pending", () => {
+    const fullResult = `${"<🚀>".repeat(3_000)}-required-tail`;
     const runs = runMap([
       makeRun({
         runId: "run-expanded",
+        endedAt: 1_000,
         completion: { required: true, resultText: fullResult },
       }),
+      makeRun({ runId: "run-next", endedAt: 2_000 }),
     ]);
 
     const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
@@ -394,10 +396,24 @@ describe("agent steering queue", () => {
     });
     const projectedResult = extractSubagentResult(leased?.prompt ?? "");
 
-    expect(projectedResult.length).toBeLessThanOrEqual(6_000);
-    expect(projectedResult.endsWith("\n[child result truncated]")).toBe(true);
-    expect(projectedResult).not.toContain("unbounded-tail");
+    expect(projectedResult).toBe(`${"&lt;🚀&gt;".repeat(3_000)}-required-tail`);
+    expect(leased?.prompt.length).toBeGreaterThan(24_000);
+    expect(leased?.runIds).toEqual(["run-expanded"]);
     expect(runs.get("run-expanded")?.completion?.resultText).toBe(fullResult);
+    expect(runs.get("run-next")?.delivery?.status).toBe("pending");
+
+    ackLeasedAgentSteeringItemsFromSubagentRuns({
+      runs,
+      runIds: leased?.runIds ?? [],
+      leaseId: "lease-expanded",
+    });
+    const next = leasePendingAgentSteeringItemsFromSubagentRuns({
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-next",
+    });
+    expect(next?.runIds).toEqual(["run-next"]);
+    expect(extractSubagentResult(next?.prompt ?? "")).toBe("result for run-next");
   });
 
   it("skips active cleanup, sanitizes metadata, and reclaims stale leases", () => {

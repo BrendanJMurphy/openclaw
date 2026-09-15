@@ -54,7 +54,7 @@ describe("child completion title data", () => {
     expect(findings).not.toContain("old result");
   });
 
-  it("bounds escaped title data without spending the child result budget", () => {
+  it("bounds escaped title data while retaining the complete child result", () => {
     const result = "R".repeat(512);
     const findings = buildChildCompletionFindings([
       {
@@ -68,7 +68,6 @@ describe("child completion title data", () => {
     ]);
     expect(findings).toContain(result);
     expect(findings).not.toContain("[child result truncated]");
-    expect(findings!.length).toBeLessThanOrEqual(4_096);
     const titleBlock = findings?.match(
       /Child task[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/,
     )?.[1];

@@ -187,26 +187,27 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     // A overlaps B and B overlaps C, but A never overlaps C. When C settles
     // last, A's results must still ride the wake and the idempotency key must
     // cover the full component (any last-settler computes the same batch).
+    const resultPrefix = "<result>".repeat(300);
     const childA = makeSettledChild({
       runId: "run-a",
       createdAt: 1_000,
       startedAt: 1_000,
       endedAt: 2_000,
-      completion: { required: true, resultText: "alpha findings" },
+      completion: { required: true, resultText: `${resultPrefix}alpha findings` },
     });
     const childB = makeSettledChild({
       runId: "run-b",
       createdAt: 1_500,
       startedAt: 1_500,
       endedAt: 3_000,
-      completion: { required: true, resultText: "bravo findings" },
+      completion: { required: true, resultText: `${resultPrefix}bravo findings` },
     });
     const childC = makeSettledChild({
       runId: "run-c",
       createdAt: 2_500,
       startedAt: 2_500,
       endedAt: 4_000,
-      completion: { required: true, resultText: "charlie findings" },
+      completion: { required: true, resultText: `${resultPrefix}charlie findings` },
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([childA, childB, childC]);
 
@@ -218,9 +219,12 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const call = deliveredCallArg();
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
     const message = String(call.triggerMessage);
-    expect(message).toContain("alpha findings");
-    expect(message).toContain("bravo findings");
-    expect(message).toContain("charlie findings");
+    for (const result of ["alpha findings", "bravo findings", "charlie findings"]) {
+      expect(message).toContain(`${"&lt;result&gt;".repeat(300)}${result}`);
+    }
+    expect(message.indexOf("alpha findings")).toBeLessThan(message.indexOf("bravo findings"));
+    expect(message.indexOf("bravo findings")).toBeLessThan(message.indexOf("charlie findings"));
+    expect(call.steerMessage).toBe(message);
   });
 
   it("keeps capacity-queued siblings in the same spawned wave", async () => {

@@ -37,10 +37,7 @@ import {
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-const MAX_CHILD_COMPLETION_RESULT_CHARS = 512;
 const MAX_CHILD_COMPLETION_FIELD_CHARS = 256;
-const MAX_CHILD_COMPLETION_FINDINGS_CHARS = 4_096;
-const CHILD_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
 const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "tool_use",
@@ -419,8 +416,6 @@ function formatChildResultData(resultText?: string | null): string {
     wrapPromptDataBlock({
       label: "Child result",
       text: resultText?.trim() || "(no output)",
-      maxEscapedChars: MAX_CHILD_COMPLETION_RESULT_CHARS,
-      truncationMarker: CHILD_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }
@@ -442,12 +437,6 @@ type ChildCompletionRow = {
   execution: ChildCompletionExecution;
   endedReason?: SubagentLifecycleEndedReason;
   completion?: Parameters<typeof resolveSubagentCompletionResultText>[0]["completion"];
-};
-
-type ChildCompletionSection = {
-  index: number;
-  text: string;
-  actionable: boolean;
 };
 
 function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
@@ -481,7 +470,7 @@ export function buildChildCompletionFindings(
         : 0;
   });
 
-  const sections: ChildCompletionSection[] = [];
+  const sections: string[] = [];
   for (const [index, child] of sorted.entries()) {
     const resultText = resolveSubagentCompletionResultText(child);
     const outcome = describeSubagentOutcome(child);
@@ -499,10 +488,8 @@ export function buildChildCompletionFindings(
       child.childSessionKey.trim() ||
       `child ${index + 1}`;
     const displayIndex = sections.length + 1;
-    sections.push({
-      index: displayIndex,
-      actionable: child.execution.outcome?.status !== "ok",
-      text: [
+    sections.push(
+      [
         wrapPromptDataBlock({
           label: `${displayIndex}. Child task`,
           text: title,
@@ -512,53 +499,14 @@ export function buildChildCompletionFindings(
         `status: ${truncateChildCompletionField(outcome)}`,
         formatChildResultData(resultText),
       ].join("\n"),
-    });
+    );
   }
 
   if (sections.length === 0) {
     return undefined;
   }
 
-  // Escaping can expand bounded child text. Preserve failures before successes,
-  // keep rendered survivors chronological, and account for omitted completions.
-  const render = (visibleSections: string[], omittedCount = 0) =>
-    [
-      "Child completion results:",
-      "",
-      ...visibleSections,
-      ...(omittedCount > 0
-        ? [
-            `[${omittedCount} additional child completion result${omittedCount === 1 ? "" : "s"} omitted to fit the context budget.]`,
-          ]
-        : []),
-    ].join("\n\n");
-  const allSections = sections.map((section) => section.text);
-  if (render(allSections).length <= MAX_CHILD_COMPLETION_FINDINGS_CHARS) {
-    return render(allSections);
-  }
-  const prioritizedSections = [
-    ...sections.filter((section) => section.actionable),
-    ...sections.filter((section) => !section.actionable),
-  ];
-  let visibleSections: ChildCompletionSection[] = [];
-  for (const section of prioritizedSections) {
-    const nextSections = [...visibleSections, section].toSorted(
-      (left, right) => left.index - right.index,
-    );
-    const omittedCount = sections.length - nextSections.length;
-    if (
-      render(
-        nextSections.map((entry) => entry.text),
-        omittedCount,
-      ).length <= MAX_CHILD_COMPLETION_FINDINGS_CHARS
-    ) {
-      visibleSections = nextSections;
-    }
-  }
-  return render(
-    visibleSections.map((section) => section.text),
-    sections.length - visibleSections.length,
-  );
+  return ["Child completion results:", "", ...sections].join("\n\n");
 }
 
 export function dedupeLatestChildCompletionRows<
