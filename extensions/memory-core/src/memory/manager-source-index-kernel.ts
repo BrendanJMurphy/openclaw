@@ -16,7 +16,7 @@ import {
   markMemoryVectorRebuildRequired,
   memoryTableExists,
 } from "./manager-vector-rebuild-state.js";
-import { replaceMemoryVectorRow } from "./manager-vector-write.js";
+import { createMemoryVectorWriter } from "./manager-vector-write.js";
 
 const MAX_VECTOR_POINT_DELETES = 32;
 
@@ -72,6 +72,7 @@ export class MemorySourceIndexKernel {
     const { entry, source, chunks, embeddings, model, now, vectorReady } = params;
     this.clear(entry.path, source);
     let writeChunk: ReturnType<typeof createMemoryChunkWriter> | undefined;
+    let writeVector: ReturnType<typeof createMemoryVectorWriter> | undefined;
     let ftsStatement: StatementSync | undefined;
     for (const [index, chunk] of chunks.entries()) {
       const embedding = embeddings[index] ?? [];
@@ -86,12 +87,8 @@ export class MemorySourceIndexKernel {
       });
       writeChunk(id, chunk, embedding);
       if (vectorReady && embedding.length > 0) {
-        replaceMemoryVectorRow({
-          db: this.database,
-          tableName: MEMORY_INDEX_VECTOR_TABLE,
-          id,
-          embedding,
-        });
+        writeVector ??= createMemoryVectorWriter(this.database, MEMORY_INDEX_VECTOR_TABLE);
+        writeVector(id, embedding);
       }
       if (this.state.fts.enabled && this.state.fts.available) {
         ftsStatement ??= this.database.prepare(
