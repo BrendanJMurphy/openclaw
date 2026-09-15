@@ -9,10 +9,7 @@ import {
   makeTempDir,
   useAutoCleanupTempDirTracker,
 } from "../../../test/helpers/temp-dir.js";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeSqliteQuerySync,
-} from "../../infra/kysely-sync.js";
+import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
@@ -42,7 +39,6 @@ import {
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import * as sqliteTargets from "./session-sqlite-target.js";
 
