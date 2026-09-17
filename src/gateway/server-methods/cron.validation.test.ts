@@ -681,6 +681,32 @@ describe("cron method validation", () => {
     },
   );
 
+  it("rejects an unusable schedule.staggerMs on cron.add instead of storing the default", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({ schedule: { kind: "cron", expr: "0 * * * *", staggerMs: "1e3" } }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.add params: schedule.staggerMs must be a non-negative integer",
+    });
+  });
+
+  it("rejects an unusable schedule.staggerMs on cron.update instead of keeping the old stagger", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { schedule: { kind: "cron", expr: "0 * * * *", staggerMs: "42.8" } } },
+      createCronJob(),
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes:
+        "invalid cron.update params: schedule.staggerMs must be a non-negative integer",
+    });
+  });
+
   it("accepts threadId on announce delivery add params", async () => {
     setRuntimeConfig(telegramConfig());
 

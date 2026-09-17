@@ -9,7 +9,11 @@ import {
   LowercaseNonEmptyStringFieldSchema,
   TrimmedNonEmptyStringFieldSchema,
 } from "./delivery-field-schemas.js";
-import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
+import {
+  normalizeCronJobCreate,
+  normalizeCronJobInput,
+  normalizeCronJobPatch,
+} from "./normalize.js";
 import { mergeCronPayload } from "./service/payload-merge.js";
 import type { CronPayload } from "./types.js";
 
@@ -311,6 +315,22 @@ describe("normalizeCronJobCreate", () => {
   it("preserves explicit exact cron schedule", () => {
     const schedule = mainSchedule({ kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 0 });
     expect(schedule.staggerMs).toBe(0);
+  });
+  it.each(["1e3", "42.8", "5m", Number.NaN, true])(
+    "rejects explicit schedule.staggerMs %s instead of applying the default stagger",
+    (staggerMs) => {
+      const schedule = { kind: "cron", expr: "0 * * * *", staggerMs };
+      const message = "schedule.staggerMs must be a non-negative integer number of milliseconds";
+      expect(() => createMain({ schedule })).toThrow(message);
+      expect(() => normalizePatch({ schedule })).toThrow(message);
+    },
+  );
+  it("keeps loading stored cron rows whose staggerMs cannot be honored", () => {
+    const normalized = normalizeCronJobInput(
+      { ...createMain(), schedule: { kind: "cron", expr: "0 * * * *", staggerMs: "1e3" } },
+      { applyDefaults: true },
+    );
+    expect(child(normalized ?? {}, "schedule").staggerMs).toBe(DEFAULT_TOP_OF_HOUR_STAGGER_MS);
   });
   it("defaults deleteAfterRun for one-shot schedules", () => {
     const normalized = createMain({ schedule: { kind: "at", at: "2026-01-12T18:00:00Z" } });

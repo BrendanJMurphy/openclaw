@@ -778,6 +778,26 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["an unusable schedule.staggerMs", { kind: "cron", expr: "0 * * * *", staggerMs: "1e3" }],
+    ["an unusable stagger shorthand", { kind: "cron", expr: "0 * * * *", stagger: "5m" }],
+  ])("rejects %s before calling the cron gateway", async (_label, schedule) => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-invalid-stagger", {
+        action: "add",
+        job: {
+          name: "stagger job",
+          schedule,
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+      }),
+    ).rejects.toThrow("schedule.staggerMs must be a non-negative integer number of milliseconds");
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("retries cron.list without compact for older gateways", async () => {
     callGatewayMock
       .mockRejectedValueOnce(

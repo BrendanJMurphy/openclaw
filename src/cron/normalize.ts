@@ -622,11 +622,32 @@ export function normalizeCronJobInput(
   return { ...next };
 }
 
+// Request normalization rejects an explicit stagger it cannot honor. Stored rows
+// use normalizeCronJobInput directly and keep dropping invalid values so one bad
+// row cannot block loading the rest of the store.
+function assertRequestedCronStaggerMs(raw: unknown): void {
+  if (!isRecord(raw)) {
+    return;
+  }
+  const schedule = snapshotOwnCronRecord(raw).schedule;
+  if (!isRecord(schedule)) {
+    return;
+  }
+  const staggerMs = snapshotOwnCronRecord(schedule).staggerMs;
+  if (staggerMs === undefined || staggerMs === null) {
+    return;
+  }
+  if (normalizeCronStaggerMs(staggerMs) === undefined) {
+    throw new Error("schedule.staggerMs must be a non-negative integer number of milliseconds");
+  }
+}
+
 /** Normalizes a raw cron create request and applies create-time defaults. */
 export function normalizeCronJobCreate(
   raw: unknown,
   options?: Omit<NormalizeOptions, "applyDefaults">,
 ): CronJobCreate | null {
+  assertRequestedCronStaggerMs(raw);
   return normalizeCronJobInput(raw, {
     applyDefaults: true,
     ...options,
@@ -638,6 +659,7 @@ export function normalizeCronJobPatch(
   raw: unknown,
   options?: NormalizeOptions,
 ): CronJobPatch | null {
+  assertRequestedCronStaggerMs(raw);
   return normalizeCronJobInput(raw, {
     applyDefaults: false,
     ...options,
